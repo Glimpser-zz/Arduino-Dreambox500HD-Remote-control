@@ -1,0 +1,51 @@
+key_code_6bit,ids_0x32_0x33_function,ids_0x32_0x33_linux_key,ids_0x34_0x35_function,ids_0x34_0x35_linux_key
+0,Power,KEY_POWER,Power,KEY_POWER
+1,Digit 1,KEY_1,,
+2,Digit 2,KEY_2,,
+3,Digit 3,KEY_3,,
+4,Digit 4,KEY_4,Digit 1,KEY_1
+5,Digit 5,KEY_5,Digit 2,KEY_2
+6,Digit 6,KEY_6,Digit 3,KEY_3
+7,Digit 7,KEY_7,Mute,KEY_MUTE
+8,Digit 8,KEY_8,Digit 4,KEY_4
+9,Digit 9,KEY_9,Digit 5,KEY_5
+10,Previous (page),KEY_PREVIOUS,Digit 6,KEY_6
+11,Digit 0,KEY_0,Previous (page),KEY_PREVIOUS
+12,Next (page),KEY_NEXT,Digit 7,KEY_7
+13,,,Digit 8,KEY_8
+14,Audio,KEY_AUDIO,Digit 9,KEY_9
+15,,,Next (page),KEY_NEXT
+16,Info,KEY_INFO,Digit 0,KEY_0
+17,Up,KEY_UP,Up,KEY_UP
+18,Menu,KEY_MENU,Exit,KEY_EXIT
+19,Left,KEY_LEFT,Volume up,KEY_VOLUMEUP
+20,OK,KEY_OK,Left,KEY_LEFT
+21,Right,KEY_RIGHT,OK,KEY_OK
+22,Help,KEY_HELP,Right,KEY_RIGHT
+23,Down,KEY_DOWN,Channel up,KEY_CHANNELUP
+24,Video,KEY_VIDEO,Volume down,KEY_VOLUMEDOWN
+25,Volume up,KEY_VOLUMEUP,Down,KEY_DOWN
+26,Mute,KEY_MUTE,Channel down,KEY_CHANNELDOWN
+27,Channel up,KEY_CHANNELUP,Info,KEY_INFO
+28,Volume down,KEY_VOLUMEDOWN,Menu,KEY_MENU
+29,Exit,KEY_EXIT,,
+30,Channel down,KEY_CHANNELDOWN,,
+31,Red,KEY_RED,Red,KEY_RED
+32,Green,KEY_GREEN,Green,KEY_GREEN
+33,Yellow,KEY_YELLOW,Yellow,KEY_YELLOW
+34,Blue,KEY_BLUE,Blue,KEY_BLUE
+35,Previous track,KEY_PREVIOUSSONG,TV,KEY_TV
+36,Play,KEY_PLAY,Radio,KEY_RADIO
+37,Stop,KEY_STOP,Teletext,KEY_TEXT
+38,Next track,KEY_NEXTSONG,Help,KEY_HELP
+39,TV,KEY_TV,,
+40,Radio,KEY_RADIO,,
+41,Teletext,KEY_TEXT,,
+42,Record,KEY_RECORD,,
+48,,,Audio,KEY_AUDIO
+49,,,Video,KEY_VIDEO
+50,,,Previous track,KEY_PREVIOUSSONG
+51,,,Play,KEY_PLAY
+52,,,Stop,KEY_STOP
+53,,,Next track,KEY_NEXTSONG
+54,,,Record,KEY_RECORD
