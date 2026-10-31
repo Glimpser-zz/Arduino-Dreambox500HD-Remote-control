@@ -1,0 +1,83 @@
+Dreambox DM500HD - IR key codes (reference)
+============================================
+
+Source: keymap table inside the kernel module dreambox_rc2.ko
+Remote protocol: header frame 0x0B3F441A + key frame (see dreambox_autosend.ino)
+
+Status:
+  - Tested on the real box: code 32 (Menu)
+  - Seen in captures of the original remote and matching this table: code 10 (Volume up), code 0 (Digit 0)
+  - All other codes are read from the module table and are not yet tested
+  - Any other code in the range 0-127 is empty in the module table and is not recognised
+
+Code | Function         | Name in sketch | Linux key in module
+-----+------------------+----------------+--------------------
+   0 | Digit 0          | K_0            | KEY_0
+   1 | Digit 1          | K_1            | KEY_1
+   2 | Digit 2          | K_2            | KEY_2
+   3 | Digit 3          | K_3            | KEY_3
+   4 | Digit 4          | K_4            | KEY_4
+   5 | Digit 5          | K_5            | KEY_5
+   6 | Digit 6          | K_6            | KEY_6
+   7 | Digit 7          | K_7            | KEY_7
+   8 | Digit 8          | K_8            | KEY_8
+   9 | Digit 9          | K_9            | KEY_9
+  10 | Volume up        | K_VOL_UP       | KEY_VOLUMEUP
+  11 | Volume down      | K_VOL_DOWN     | KEY_VOLUMEDOWN
+  12 | TV               | K_TV           | KEY_TV
+  13 | Channel up       | K_CH_UP        | KEY_CHANNELUP
+  14 | Channel down     | K_CH_DOWN      | KEY_CHANNELDOWN
+  15 | Power            | K_POWER        | KEY_POWER
+  32 | Menu             | K_MENU         | KEY_MENU
+  33 | Up               | K_UP           | KEY_UP
+  34 | Down             | K_DOWN         | KEY_DOWN
+  35 | Left             | K_LEFT         | KEY_LEFT
+  36 | Right            | K_RIGHT        | KEY_RIGHT
+  37 | OK               | K_OK           | KEY_OK
+  38 | Audio            | K_AUDIO        | KEY_AUDIO
+  39 | Video            | K_VIDEO        | KEY_VIDEO
+  40 | Info             | K_INFO         | KEY_INFO
+  48 | Previous track   | K_PREV_TRACK   | KEY_PREVIOUSSONG
+  49 | Play             | K_PLAY         | KEY_PLAY
+  50 | Play/Pause       | K_PLAY_PAUSE   | KEY_PLAYPAUSE
+  51 | Next track       | K_NEXT_TRACK   | KEY_NEXTSONG
+  52 | Stop             | K_STOP         | KEY_STOP
+  53 | Record           | K_RECORD       | KEY_RECORD
+  64 | Red              | K_RED          | KEY_RED
+  65 | Green            | K_GREEN        | KEY_GREEN
+  66 | Yellow           | K_YELLOW       | KEY_YELLOW
+  67 | Blue             | K_BLUE         | KEY_BLUE
+  68 | Mute             | K_MUTE         | KEY_MUTE
+  69 | Teletext         | K_TEXT         | KEY_TEXT
+  80 | Next (page)      | K_PAGE_NEXT    | KEY_NEXT
+  81 | Previous (page)  | K_PAGE_PREV    | KEY_PREVIOUS
+  82 | Exit             | K_EXIT         | KEY_EXIT
+  83 | Radio            | K_RADIO        | KEY_RADIO
+  84 | Help             | K_HELP         | KEY_HELP
+  96 | Keypad 0         | K_KP0          | KEY_KP0
+  97 | Keypad 1         | K_KP1          | KEY_KP1
+  98 | Keypad 2         | K_KP2          | KEY_KP2
+  99 | Keypad 3         | K_KP3          | KEY_KP3
+ 100 | Keypad 4         | K_KP4          | KEY_KP4
+ 101 | Keypad 5         | K_KP5          | KEY_KP5
+ 102 | Keypad 6         | K_KP6          | KEY_KP6
+ 103 | Keypad 7         | K_KP7          | KEY_KP7
+ 104 | Keypad 8         | K_KP8          | KEY_KP8
+ 105 | Keypad 9         | K_KP9          | KEY_KP9
+
+Arduino constants (paste into a sketch):
+
+const uint8_t K_0 = 0, K_1 = 1, K_2 = 2, K_3 = 3, K_4 = 4;
+const uint8_t K_5 = 5, K_6 = 6, K_7 = 7, K_8 = 8, K_9 = 9;
+const uint8_t K_VOL_UP = 10, K_VOL_DOWN = 11, K_TV = 12;
+const uint8_t K_CH_UP = 13, K_CH_DOWN = 14, K_POWER = 15;
+const uint8_t K_MENU = 32, K_UP = 33, K_DOWN = 34, K_LEFT = 35, K_RIGHT = 36, K_OK = 37;
+const uint8_t K_AUDIO = 38, K_VIDEO = 39, K_INFO = 40;
+const uint8_t K_PREV_TRACK = 48, K_PLAY = 49, K_PLAY_PAUSE = 50;
+const uint8_t K_NEXT_TRACK = 51, K_STOP = 52, K_RECORD = 53;
+const uint8_t K_RED = 64, K_GREEN = 65, K_YELLOW = 66, K_BLUE = 67;
+const uint8_t K_MUTE = 68, K_TEXT = 69;
+const uint8_t K_PAGE_NEXT = 80, K_PAGE_PREV = 81;
+const uint8_t K_EXIT = 82, K_RADIO = 83, K_HELP = 84;
+const uint8_t K_KP0 = 96, K_KP1 = 97, K_KP2 = 98, K_KP3 = 99, K_KP4 = 100;
+const uint8_t K_KP5 = 101, K_KP6 = 102, K_KP7 = 103, K_KP8 = 104, K_KP9 = 105;
