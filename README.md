@@ -12,7 +12,7 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 | Sony remote sends | Arduino sends |
 |---|---|
 | a key that has a rule (see [mapping](docs/sony-yamaha-mapping.md)) | the matching Yamaha (NEC) or Dreambox code |
-| a Sony code without a rule | the same Sony code, unchanged |
+| a Sony code without a rule | the captured raw Sony frame, including mark/space timings |
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the Sony key is held. All other keys send one action.
 * All IR output uses a **hardware 38 kHz carrier from Timer3** (pin 5, `OC3A`).
