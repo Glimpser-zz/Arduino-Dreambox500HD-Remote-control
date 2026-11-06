@@ -43,4 +43,4 @@ The Yamaha amplifier uses the NEC protocol. The words were learned from the Yama
 | Power off | `0xE11E857A` | 0x7A | 0x85 | 0x1E | 0xE1 |
 
 NEC timing used by the sketch: leader 9 ms burst + 4.5 ms space, bits `562 us` burst + `562 us` (0) or `1688 us` (1) space, stop burst `562 us`;
-while a key is held, short repeat codes (9 ms burst, 2.25 ms space, 562 us burst) every 108 ms.
+while a key is held, the complete 32-bit NEC command is retransmitted every 108 ms (the RX-V557 did not reliably respond to short NEC repeat codes).
