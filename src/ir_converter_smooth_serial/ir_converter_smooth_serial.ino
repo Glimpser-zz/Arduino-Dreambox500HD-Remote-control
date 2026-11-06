@@ -219,11 +219,13 @@ void sendSonyFrame(uint8_t bits, uint32_t value) {
   digitalWrite(STATUS_LED, LOW);
 }
 
-void forwardSony(uint8_t bits, uint32_t value) {
-  LOG("  forward: unmapped Sony code re-sent unchanged");
-  setCarrier(SONY_CARRIER_KHZ);
-  sendSonyFrame(bits, value);
-  setCarrier(CARRIER_KHZ);
+void sendSonyRawFrame(const uint16_t *timings, uint8_t count) {
+  digitalWrite(STATUS_LED, HIGH);
+  for (uint8_t i = 0; i < count; i++) {
+    if ((i & 1) == 0) burst(timings[i]); // receiver LOW = IR mark
+    else idle(timings[i]);               // receiver HIGH = space
+  }
+  digitalWrite(STATUS_LED, LOW);
 }
 
 // ---------------- NEC ----------------
@@ -304,7 +306,17 @@ uint8_t unknownBits = 0;
 uint32_t unknownValue = 0;
 uint32_t unknownLastFrameAt = 0;
 uint32_t unknownLastSendAt = 0;
+uint16_t unknownRaw[MAXRAW];
+uint8_t unknownRawLen = 0;
 const uint16_t SONY_REPEAT_MS = 45;
+
+// Forward the captured mark/space sequence, not a newly synthesized SIRC frame.
+void forwardUnknownSonyRaw() {
+  LOG("  forward: unmapped Sony raw frame");
+  setCarrier(SONY_CARRIER_KHZ);
+  sendSonyRawFrame(unknownRaw, unknownRawLen);
+  setCarrier(CARRIER_KHZ);
+}
 
 void runSingle(const Rule &r) {
   LOG("  send: single action");
@@ -353,7 +365,7 @@ void serviceActive() {
     }
     if ((uint32_t)(now - unknownLastSendAt) >= SONY_REPEAT_MS) {
       unknownLastSendAt = now;
-      forwardSony(unknownBits, unknownValue);
+      forwardUnknownSonyRaw();
     }
     return;
   }
@@ -439,10 +451,12 @@ void onSony(uint8_t bits, uint32_t value) {
     unknownValue = value;
     unknownLastFrameAt = millis();              // start release timeout after any previous key is finished
     unknownLastSendAt = unknownLastFrameAt;
+    unknownRawLen = rawLen;
+    for (uint8_t i = 0; i < rawLen; i++) unknownRaw[i] = raw[i];
 #if DEBUG_LED
     blink(3, 50);
 #endif
-    forwardSony(bits, value);                       // first frame; repeats are generated while held
+    forwardUnknownSonyRaw();                        // preserve received mark/space timings
     return;
   }
 
