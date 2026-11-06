@@ -367,8 +367,8 @@ void serviceActive() {
         LOG("  send: NEC full-frame repeat");
         // The RX-V557 accepts the initial NEC command but does not reliably
         // act on short NEC repeat codes. Repeat the complete command instead.
+        lastSendAt = millis();              // schedule from the start of this full NEC frame
         sendNecFrame(r.outValue);
-        lastSendAt = now;
       }
     } else {
       LOG("  key released");
