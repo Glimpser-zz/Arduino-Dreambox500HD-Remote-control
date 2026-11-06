@@ -437,8 +437,8 @@ void onSony(uint8_t bits, uint32_t value) {
     activeUnknown = true;
     unknownBits = bits;
     unknownValue = value;
-    unknownLastFrameAt = now;
-    unknownLastSendAt = millis();
+    unknownLastFrameAt = millis();              // start release timeout after any previous key is finished
+    unknownLastSendAt = unknownLastFrameAt;
 #if DEBUG_LED
     blink(3, 50);
 #endif
