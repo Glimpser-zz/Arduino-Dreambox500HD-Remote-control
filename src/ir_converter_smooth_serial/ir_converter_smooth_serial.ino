@@ -297,6 +297,15 @@ uint32_t lastFrameAt = 0;      // time of the last Sony frame of that key
 uint32_t lastSendAt = 0;       // start time of the last code sent for that key
 uint8_t sentRepeats = 0;       // Dreambox repeat pairs sent for that key
 
+// Unmapped Sony keys are repeated locally while held. Transmitting blocks the
+// receiver, so relying only on incoming SIRC repeat frames can miss hold repeats.
+bool activeUnknown = false;
+uint8_t unknownBits = 0;
+uint32_t unknownValue = 0;
+uint32_t unknownLastFrameAt = 0;
+uint32_t unknownLastSendAt = 0;
+const uint16_t SONY_REPEAT_MS = 45;
+
 void runSingle(const Rule &r) {
   LOG("  send: single action");
   if (r.out == OUT_DREAMBOX) dreamboxSequence((uint8_t)r.outValue);
@@ -334,7 +343,20 @@ void finishActive() {
 
 // Called on every pass of loop(): repeats while held, completes the press at the release.
 void serviceActive() {
-  if (activeRule < 0) return;
+  if (activeRule < 0) {
+    if (!activeUnknown) return;
+    uint32_t now = millis();
+    if ((uint32_t)(now - unknownLastFrameAt) > RELEASE_SINGLE_MS) {
+      activeUnknown = false;
+      LOG("  unmapped Sony key released");
+      return;
+    }
+    if ((uint32_t)(now - unknownLastSendAt) >= SONY_REPEAT_MS) {
+      unknownLastSendAt = now;
+      forwardSony(unknownBits, unknownValue);
+    }
+    return;
+  }
   const Rule &r = RULES[activeRule];
   uint32_t now = millis();
   uint32_t quiet = (uint32_t)(now - lastFrameAt);
@@ -407,14 +429,24 @@ void onSony(uint8_t bits, uint32_t value) {
   lastUnknownAt = now;
 
   if (found < 0) {
+    if (activeUnknown && bits == unknownBits && value == unknownValue) {
+      unknownLastFrameAt = now;                     // same unmapped key is still held
+      return;
+    }
     finishActive();                                 // stop any previous mapped key before pass-through
+    activeUnknown = true;
+    unknownBits = bits;
+    unknownValue = value;
+    unknownLastFrameAt = now;
+    unknownLastSendAt = millis();
 #if DEBUG_LED
     blink(3, 50);
 #endif
-    forwardSony(bits, value);                       // no rule: send the Sony code on, unchanged
+    forwardSony(bits, value);                       // first frame; repeats are generated while held
     return;
   }
 
+  activeUnknown = false;                            // a mapped key replaced the unmapped key
   finishActive();                                   // a different key went down: complete the previous one first
 #if DEBUG_LED
   blink(2, 150);
