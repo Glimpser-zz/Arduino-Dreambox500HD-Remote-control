@@ -407,6 +407,7 @@ void onSony(uint8_t bits, uint32_t value) {
   lastUnknownAt = now;
 
   if (found < 0) {
+    finishActive();                                 // stop any previous mapped key before pass-through
 #if DEBUG_LED
     blink(3, 50);
 #endif
