@@ -364,8 +364,10 @@ void serviceActive() {
   } else {
     if (!released) {
       if ((uint32_t)(now - lastSendAt) >= NEC_REPEAT_MS) {
-        LOG("  send: NEC repeat code");
-        sendNecRepeat();
+        LOG("  send: NEC full-frame repeat");
+        // The RX-V557 accepts the initial NEC command but does not reliably
+        // act on short NEC repeat codes. Repeat the complete command instead.
+        sendNecFrame(r.outValue);
         lastSendAt = now;
       }
     } else {
