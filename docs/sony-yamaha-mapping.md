@@ -24,7 +24,7 @@ Sony 12/15/20-bit SIRC codes: the value is the transmitted bits, least significa
 | CH- | 12 | `0x091` | 1 / 17 | Dreambox | Dreambox Volume down | yes |
 | 3D | 15 | `0x3BCD` | 119 / 77 | Dreambox | Dreambox Yellow | no |
 
-Sony codes that are not in this table are re-sent to the TV unchanged.
+Sony codes that are not in this table are forwarded using the captured raw mark/space timings (rather than decoding and rebuilding nominal SIRC timings). While an unmapped key is held, that captured frame is repeated locally every 45 ms; forwarding stops after 120 ms without another received frame.
 
 ## Yamaha NEC codes
 
