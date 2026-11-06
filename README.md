@@ -1,7 +1,7 @@
 # Arduino Dreambox 500HD Remote Control
 
 An Arduino Mega 2560 that sits in front of a Sony TV remote and turns it into a remote for a **Dreambox 500HD** and a **Yamaha amplifier**.
-Keys that the TV does not use are translated to Dreambox or Yamaha commands. Every other Sony code is sent on to the TV unchanged.
+Keys that the TV does not use are translated to Dreambox or Yamaha commands. Every other Sony code is forwarded to the TV using the captured raw mark/space timings; while held, the captured frame is repeated locally.
 
 The Dreambox IR protocol used here is **not documented anywhere**. It was reverse engineered from the Dreambox kernel module
 `dreambox_rc2.ko` (key tables, frame format) and checked against frames captured from the original remote. All extracted codes are in
