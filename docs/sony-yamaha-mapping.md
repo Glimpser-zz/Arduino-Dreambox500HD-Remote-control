@@ -24,7 +24,7 @@ Sony 12/15/20-bit SIRC codes: the value is the transmitted bits, least significa
 | CH- | 12 | `0x091` | 1 / 17 | Dreambox | Dreambox Volume down | yes |
 | 3D | 15 | `0x3BCD` | 119 / 77 | Dreambox | Dreambox Yellow | no |
 
-Sony codes that are not in this table are forwarded using the captured raw mark/space timings (rather than decoding and rebuilding nominal SIRC timings). While an unmapped key is held, that captured frame is repeated locally every 45 ms; forwarding stops after 120 ms without another received frame.
+Sony codes that are not in this table are re-sent to the TV unchanged (version 1.5: after the key is released, as one press of 3 frames, 45 ms apart, 40 kHz carrier).
 
 ## Yamaha NEC codes
 
@@ -43,4 +43,4 @@ The Yamaha amplifier uses the NEC protocol. The words were learned from the Yama
 | Power off | `0xE11E857A` | 0x7A | 0x85 | 0x1E | 0xE1 |
 
 NEC timing used by the sketch: leader 9 ms burst + 4.5 ms space, bits `562 us` burst + `562 us` (0) or `1688 us` (1) space, stop burst `562 us`;
-while a key is held, the complete 32-bit NEC command is retransmitted every 108 ms (the RX-V557 did not reliably respond to short NEC repeat codes).
+while a key is held, version 1.4 sends the full frame again about every 120 ms. (Up to version 1.3 it sent short repeat codes, 9 ms burst + 2.25 ms space + 562 us burst, every 108 ms; the amplifier did not keep changing the volume with them. Set `NEC_HOLD_FULL_FRAME` to 0 to get them back.)

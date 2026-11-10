@@ -1,4 +1,4 @@
-// ir_converter_smooth_serial | version 1.3 | build date 2026-10-30 | carrier: hardware timer (Timer3, pin 5), 38 kHz for everything
+// ir_converter_smooth_serial | version 1.5 | build date 2026-11-06 | carrier: hardware timer (Timer3, pin 5)
 #include <Arduino.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
@@ -12,7 +12,8 @@
 //                               Dreambox: down pair, repeat pairs every 118 ms, "key up" pair at the release.
 //                               Yamaha:   full NEC frame, then short NEC repeat codes every 108 ms.
 //   rules with repeat = false : one single action, sent once the key has been released.
-//   Sony codes without a rule are re-sent unchanged, as received, with the same 38 kHz hardware carrier.
+//   Sony codes without a rule are re-sent unchanged, as received: after the Sony key is released, a complete press of
+//   3 frames exactly 45 ms apart, sent the way the frequency scan did it (the TV reacted to that at every carrier from 36 to 42 kHz).
 // The built-in LED (pin 13) is on while something is being transmitted.
 
 #define USE_SERIAL   1     // 1 = print received Sony codes on the Serial Monitor (115200 baud)
@@ -28,7 +29,7 @@ const uint8_t RX_PIN = 52;
 const uint8_t TX_PIN = 5;              // OC3A / Timer3
 const uint8_t STATUS_LED = 13;
 const uint16_t CARRIER_KHZ = 38;             // Dreambox and Yamaha
-const uint8_t  SONY_CARRIER_KHZ = 38;          // carrier for re-sent Sony codes (38 = same as everything else; 40 is the Sony standard)
+const uint8_t  SONY_CARRIER_KHZ = 40;          // carrier for re-sent Sony codes: 40 kHz is the Sony standard (36 to 42 kHz all worked in the scan)
 
 // ---- Dreambox protocol (measured on the real remote) ----
 const uint16_t MARK_US = 200;
@@ -46,10 +47,25 @@ const uint8_t FLAG_DOWN = 0x0, FLAG_REPEAT = 0x8, FLAG_UP = 0x9;
 const uint16_t NEC_REPEAT_MS = 108;         // start of the frame / of a repeat code to the start of the next
 const uint8_t  NEC_TAP_REPEATS = 0;         // repeat codes after the frame for single (non-repeat) rules
 
+// ---- NEC hold behaviour of the Yamaha amplifier ----
+// 1 = while a key is held, send the full NEC frame again every NEC_HOLD_FRAME_MS (the amplifier did not
+//     step the volume continuously with the short NEC repeat codes);  0 = send short NEC repeat codes instead.
+#define NEC_HOLD_FULL_FRAME 1
+const uint16_t NEC_HOLD_FRAME_MS = 120;     // start of one full frame to the start of the next
+
+// ---- Sony SIRC re-send of unmapped codes ----
+// 1 = send one complete press (3 frames, exactly 45 ms apart) after the Sony key has been released: the same
+//     way the frequency scan sent it, without overlap with the original remote. Holding such a key does not repeat it.
+// 0 = start at once and keep sending a frame every 45 ms while the key is held (less exact timing).
+#define SONY_FORWARD_AFTER_RELEASE 1
+const uint16_t SONY_FRAME_MS = 45;          // frame start to frame start (SIRC)
+const uint8_t  SONY_MIN_FRAMES = 3;         // SIRC commands are sent at least three times
+const uint16_t RELEASE_FWD_MS = 150;        // no frame of that key for this long = released
+
 // ---- Sony remote: no frame for this long = key released ----
 const uint16_t RELEASE_SINGLE_MS = 120;     // keys with repeat = false (nothing is sent in the meantime)
 const uint16_t RELEASE_HELD_MS = 200;       // Dreambox keys with repeat = true (our own sending makes us miss frames)
-const uint16_t RELEASE_NEC_HELD_MS = 160;   // Yamaha keys with repeat = true
+const uint16_t RELEASE_NEC_HELD_MS = 220;   // Yamaha keys with repeat = true
 
 // ---- Dreambox key codes ----
 const uint8_t K_MENU = 32, K_EXIT = 82, K_OK = 37, K_LEFT = 35, K_RIGHT = 36;
@@ -219,13 +235,69 @@ void sendSonyFrame(uint8_t bits, uint32_t value) {
   digitalWrite(STATUS_LED, LOW);
 }
 
-void sendSonyRawFrame(const uint16_t *timings, uint8_t count) {
-  digitalWrite(STATUS_LED, HIGH);
-  for (uint8_t i = 0; i < count; i++) {
-    if ((i & 1) == 0) burst(timings[i]); // receiver LOW = IR mark
-    else idle(timings[i]);               // receiver HIGH = space
+// One complete Sony press: 3 frames, each started exactly SONY_FRAME_MS after the previous one (busy wait).
+void sendSonyPress(uint8_t bits, uint32_t value) {
+  setCarrier(SONY_CARRIER_KHZ);
+  for (uint8_t f = 0; f < SONY_MIN_FRAMES; f++) {
+    uint32_t t0 = millis();
+    sendSonyFrame(bits, value);
+    while ((uint32_t)(millis() - t0) < SONY_FRAME_MS) { }
   }
-  digitalWrite(STATUS_LED, LOW);
+}
+
+// Forwarding state: one unmapped Sony key at a time.
+bool fwdActive = false;
+bool fwdPending = false;       // the press has not been sent yet (waiting for the key release)
+uint8_t fwdBits = 0;
+uint32_t fwdValue = 0;
+uint32_t fwdLastFrameAt = 0;   // time of the last received frame of that key
+uint32_t fwdLastSendAt = 0;    // start time of the last frame we sent (hold mode only)
+
+// Send a press that is still waiting, then go back to the normal carrier.
+void finishForward() {
+  if (!fwdActive) return;
+  if (fwdPending) {
+    LOG("  forward: unmapped Sony code re-sent unchanged");
+    sendSonyPress(fwdBits, fwdValue);
+    fwdPending = false;
+  }
+  fwdActive = false;
+  setCarrier(CARRIER_KHZ);                          // back to the carrier of the other devices
+}
+
+// First frame of an unmapped Sony key.
+void startForward(uint8_t bits, uint32_t value) {
+  fwdActive = true;
+  fwdBits = bits;
+  fwdValue = value;
+  fwdLastFrameAt = millis();
+#if SONY_FORWARD_AFTER_RELEASE
+  fwdPending = true;                                // sent when the key is released
+#else
+  fwdPending = false;
+  LOG("  forward: unmapped Sony code re-sent unchanged");
+  sendSonyPress(bits, value);                       // the 3 frames now, more while the key is held
+  fwdLastSendAt = millis();
+#endif
+}
+
+// Called on every pass of loop().
+void serviceForward() {
+  if (!fwdActive) return;
+  uint32_t now = millis();
+  bool released = (uint32_t)(now - fwdLastFrameAt) > RELEASE_FWD_MS;
+#if SONY_FORWARD_AFTER_RELEASE
+  if (released) finishForward();                    // sends the press and restores the carrier
+#else
+  if (!released) {
+    if ((uint32_t)(now - fwdLastSendAt) >= SONY_FRAME_MS) {
+      sendSonyFrame(fwdBits, fwdValue);
+      fwdLastSendAt = now;
+    }
+  } else {
+    finishForward();
+  }
+#endif
 }
 
 // ---------------- NEC ----------------
@@ -299,25 +371,6 @@ uint32_t lastFrameAt = 0;      // time of the last Sony frame of that key
 uint32_t lastSendAt = 0;       // start time of the last code sent for that key
 uint8_t sentRepeats = 0;       // Dreambox repeat pairs sent for that key
 
-// Unmapped Sony keys are repeated locally while held. Transmitting blocks the
-// receiver, so relying only on incoming SIRC repeat frames can miss hold repeats.
-bool activeUnknown = false;
-uint8_t unknownBits = 0;
-uint32_t unknownValue = 0;
-uint32_t unknownLastFrameAt = 0;
-uint32_t unknownLastSendAt = 0;
-uint16_t unknownRaw[MAXRAW];
-uint8_t unknownRawLen = 0;
-const uint16_t SONY_REPEAT_MS = 45;
-
-// Forward the captured mark/space sequence, not a newly synthesized SIRC frame.
-void forwardUnknownSonyRaw() {
-  LOG("  forward: unmapped Sony raw frame");
-  setCarrier(SONY_CARRIER_KHZ);
-  sendSonyRawFrame(unknownRaw, unknownRawLen);
-  setCarrier(CARRIER_KHZ);
-}
-
 void runSingle(const Rule &r) {
   LOG("  send: single action");
   if (r.out == OUT_DREAMBOX) dreamboxSequence((uint8_t)r.outValue);
@@ -355,20 +408,7 @@ void finishActive() {
 
 // Called on every pass of loop(): repeats while held, completes the press at the release.
 void serviceActive() {
-  if (activeRule < 0) {
-    if (!activeUnknown) return;
-    uint32_t now = millis();
-    if ((uint32_t)(now - unknownLastFrameAt) > RELEASE_SINGLE_MS) {
-      activeUnknown = false;
-      LOG("  unmapped Sony key released");
-      return;
-    }
-    if ((uint32_t)(now - unknownLastSendAt) >= SONY_REPEAT_MS) {
-      unknownLastSendAt = now;
-      forwardUnknownSonyRaw();
-    }
-    return;
-  }
+  if (activeRule < 0) return;
   const Rule &r = RULES[activeRule];
   uint32_t now = millis();
   uint32_t quiet = (uint32_t)(now - lastFrameAt);
@@ -397,13 +437,19 @@ void serviceActive() {
     }
   } else {
     if (!released) {
-      if ((uint32_t)(now - lastSendAt) >= NEC_REPEAT_MS) {
-        LOG("  send: NEC full-frame repeat");
-        // The RX-V557 accepts the initial NEC command but does not reliably
-        // act on short NEC repeat codes. Repeat the complete command instead.
-        lastSendAt = millis();              // schedule from the start of this full NEC frame
+#if NEC_HOLD_FULL_FRAME
+      if ((uint32_t)(now - lastSendAt) >= NEC_HOLD_FRAME_MS) {
+        LOG("  send: NEC full frame again (key held)");
         sendNecFrame(r.outValue);
+        lastSendAt = now;
       }
+#else
+      if ((uint32_t)(now - lastSendAt) >= NEC_REPEAT_MS) {
+        LOG("  send: NEC repeat code");
+        sendNecRepeat();
+        lastSendAt = now;
+      }
+#endif
     } else {
       LOG("  key released");
       activeRule = -1;                              // NEC has no "key up"
@@ -426,6 +472,10 @@ void onSony(uint8_t bits, uint32_t value) {
     lastFrameAt = now;
     return;
   }
+  if (found < 0 && fwdActive && bits == fwdBits && value == fwdValue) {   // the same unmapped key is still down
+    fwdLastFrameAt = now;
+    return;
+  }
 
 #if USE_SERIAL
   bool newUnknown = (bits != lastBits) || (value != lastValue) || ((uint32_t)(now - lastUnknownAt) > 250UL);
@@ -441,26 +491,16 @@ void onSony(uint8_t bits, uint32_t value) {
   lastUnknownAt = now;
 
   if (found < 0) {
-    if (activeUnknown && bits == unknownBits && value == unknownValue) {
-      unknownLastFrameAt = now;                     // same unmapped key is still held
-      return;
-    }
-    finishActive();                                 // stop any previous mapped key before pass-through
-    activeUnknown = true;
-    unknownBits = bits;
-    unknownValue = value;
-    unknownLastFrameAt = millis();              // start release timeout after any previous key is finished
-    unknownLastSendAt = unknownLastFrameAt;
-    unknownRawLen = rawLen;
-    for (uint8_t i = 0; i < rawLen; i++) unknownRaw[i] = raw[i];
 #if DEBUG_LED
     blink(3, 50);
 #endif
-    forwardUnknownSonyRaw();                        // preserve received mark/space timings
+    finishActive();                                 // complete the previous mapped key first
+    finishForward();
+    startForward(bits, value);                      // no rule: send the Sony code on, unchanged
     return;
   }
 
-  activeUnknown = false;                            // a mapped key replaced the unmapped key
+  finishForward();                                  // a mapped key: stop forwarding an unmapped one, restore the carrier
   finishActive();                                   // a different key went down: complete the previous one first
 #if DEBUG_LED
   blink(2, 150);
@@ -524,4 +564,5 @@ void loop() {
     if (captureFrame()) handleFrame();
   }
   serviceActive();
+  serviceForward();
 }

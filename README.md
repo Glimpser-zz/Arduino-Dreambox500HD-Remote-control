@@ -1,7 +1,7 @@
 # Arduino Dreambox 500HD Remote Control
 
 An Arduino Mega 2560 that sits in front of a Sony TV remote and turns it into a remote for a **Dreambox 500HD** and a **Yamaha amplifier**.
-Keys that the TV does not use are translated to Dreambox or Yamaha commands. Every other Sony code is forwarded to the TV using the captured raw mark/space timings; while held, the captured frame is repeated locally.
+Keys that the TV does not use are translated to Dreambox or Yamaha commands. Every other Sony code is sent on to the TV unchanged.
 
 The Dreambox IR protocol used here is **not documented anywhere**. It was reverse engineered from the Dreambox kernel module
 `dreambox_rc2.ko` (key tables, frame format) and checked against frames captured from the original remote. All extracted codes are in
@@ -12,10 +12,11 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 | Sony remote sends | Arduino sends |
 |---|---|
 | a key that has a rule (see [mapping](docs/sony-yamaha-mapping.md)) | the matching Yamaha (NEC) or Dreambox code |
-| a Sony code without a rule | the captured raw Sony frame, including mark/space timings |
+| a Sony code without a rule | the same Sony code, unchanged |
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the Sony key is held. All other keys send one action.
-* All IR output uses a **hardware 38 kHz carrier from Timer3** (pin 5, `OC3A`).
+* Unmapped Sony codes are re-sent after the key is released as one complete press: **3 frames, exactly 45 ms apart**, 40 kHz carrier. Holding such a key does not repeat it.
+* All IR output uses a **hardware carrier from Timer3** (pin 5, `OC3A`): 38 kHz for the Dreambox and the Yamaha amplifier, 40 kHz for re-sent Sony codes.
 
 ## Hardware
 
@@ -55,6 +56,7 @@ docs/                             hardware, protocol, key codes, mapping, extrac
 
 * Tested on a real Dreambox 500HD: **Menu, Up, Down, Right, OK**. Two more codes (digit 0 and volume up) appear in captures of the original remote. All other Dreambox codes come from the module's key table and are **not tested yet**.
 * Yamaha NEC codes were learned from the Yamaha remote itself.
-* Re-sending unmapped Sony codes is the least tested part. The Sony standard carrier is 40 kHz, but the sketch uses 38 kHz for everything; the author's TV did not react to a 40 kHz re-send.
+* Re-sending unmapped Sony codes: versions 1.2 to 1.4 did not make the TV react. The reason is not certain. Version 1.5 sends the press the way the frequency scan did, which **did** make the TV react at every carrier from 36 to 42 kHz (see [`tools/ir_sony_freq_scan`](tools/ir_sony_freq_scan)). Whether the converter now works with the TV has **not been confirmed yet**. The IR LED must also point at the TV's IR window.
+* Yamaha volume while a key is held: with short NEC repeat codes (up to 1.3) the amplifier did not keep changing the volume; since 1.4 the full NEC frame is repeated about every 120 ms, and the author confirmed that this works.
 * The key-frame check digit and flag nibble were derived from the module and from three captured frames of one key. They match all captured frames; other keys use the same formula.
 * This project is not affiliated with Dreambox, Sony or Yamaha. The kernel module itself is **not** included, only numbers derived from it.
