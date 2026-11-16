@@ -1,23 +1,34 @@
-// ir_converter_smooth_serial | version 1.5 | build date 2026-11-06 | carrier: hardware timer (Timer3, pin 5)
+// ir_converter_smooth_serial | version 2.0 | build date 2026-11-06 | three remotes (Sony, Yamaha, Dreambox) | carrier: hardware timer (Timer3, pin 5)
 #include <Arduino.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 
-// IR converter with natural key holding - Arduino Mega 2560, hardware 38 kHz carrier from Timer3
-// Sony TV remote (KY-022 receiver on pin 52)  ->  Yamaha amplifier (NEC) / Dreambox (IR LED + resistor on pin 5).
+// IR converter and repeater - Arduino Mega 2560, hardware carrier from Timer3
+// Receives the Sony TV remote, the Yamaha amplifier remote and the Dreambox remote with one KY-022 receiver (pin 52).
+// Sends to the Sony TV, the Yamaha amplifier and the Dreambox with one IR LED + driver (pin 5).
 //
-// How keys behave, like the original remotes:
-//   volume up / volume down (Yamaha and Dreambox) are continuous: the code is sent when the key goes down and repeated while the key stays down.
-//   rules with repeat = true  : the code is sent when the key goes down and repeated while the key stays down.
-//                               Dreambox: down pair, repeat pairs every 118 ms, "key up" pair at the release.
-//                               Yamaha:   full NEC frame, then short NEC repeat codes every 108 ms.
-//   rules with repeat = false : one single action, sent once the key has been released.
-//   Sony codes without a rule are re-sent unchanged, as received: after the Sony key is released, a complete press of
-//   3 frames exactly 45 ms apart, sent the way the frequency scan did it (the TV reacted to that at every carrier from 36 to 42 kHz).
+// For every key that is received:
+//   - if it has a rule in the RULES table below, the rule is executed (conversion between remotes);
+//   - if it has no rule, it is passed on unchanged to the device it belongs to:
+//         Sony remote    -> Sony TV      (one press of 3 frames, 45 ms apart, after the key is released)
+//         Yamaha remote  -> Yamaha amp   (NEC frame, repeated while the key is held)
+//         Dreambox remote-> Dreambox     (down pair, repeat pairs every 118 ms, up pair)
+//
+// Two ways to place the Arduino:
+//   A) next to the Yamaha amplifier and the Dreambox, their own IR windows covered: keep all three FORWARD_ options at 1.
+//   B) away from them, where the Arduino only has to see the Sony remote: the original Yamaha and Dreambox remotes
+//      reach their devices directly, so set FORWARD_YAMAHA_REMOTE and FORWARD_DREAMBOX_REMOTE to 0
+//      (their keys with a rule in the table are still converted).
+//
+// Continuous keys (rule field repeat = true) repeat while held: the volume keys.
 // The built-in LED (pin 13) is on while something is being transmitted.
 
-#define USE_SERIAL   1     // 1 = print received Sony codes on the Serial Monitor (115200 baud)
+#define USE_SERIAL   1     // 1 = print received codes on the Serial Monitor (115200 baud)
 #define DEBUG_LED    0     // 1 = blink the built-in LED for a received key: 2 slow = rule found, 3 fast = no rule
+
+#define FORWARD_SONY_REMOTE      1   // 1 = pass unmapped keys of the Sony remote on to the TV
+#define FORWARD_YAMAHA_REMOTE    1   // 1 = pass unmapped keys of the Yamaha remote on to the amplifier
+#define FORWARD_DREAMBOX_REMOTE  1   // 1 = pass unmapped keys of the Dreambox remote on to the Dreambox
 
 #if USE_SERIAL
 #define LOG(text) do { Serial.println(F(text)); Serial.flush(); } while (0)
@@ -29,7 +40,7 @@ const uint8_t RX_PIN = 52;
 const uint8_t TX_PIN = 5;              // OC3A / Timer3
 const uint8_t STATUS_LED = 13;
 const uint16_t CARRIER_KHZ = 38;             // Dreambox and Yamaha
-const uint8_t  SONY_CARRIER_KHZ = 40;          // carrier for re-sent Sony codes: 40 kHz is the Sony standard (36 to 42 kHz all worked in the scan)
+const uint8_t  SONY_CARRIER_KHZ = 40;          // carrier for Sony codes: 40 kHz is the Sony standard (36 to 42 kHz all worked in the scan)
 
 // ---- Dreambox protocol (measured on the real remote) ----
 const uint16_t MARK_US = 200;
@@ -42,6 +53,10 @@ const uint32_t RELEASE_GAP_US = 13260;
 const uint16_t DREAMBOX_REPEAT_MS = 118;    // start of one pair to the start of the next
 const uint8_t  DREAMBOX_MIN_REPEATS = 2;    // every press sends at least this many repeat pairs (tested)
 const uint8_t FLAG_DOWN = 0x0, FLAG_REPEAT = 0x8, FLAG_UP = 0x9;
+// header frames the Dreambox module accepts (index 0-3 and 7-11 of its table)
+const uint32_t DB_HEADERS[] = { 0x0E0F441AUL, 0x0D1F441AUL, 0x0C2F441AUL, 0x0B3F441AUL, 0x2B1F441AUL,
+                                0x3B0F441AUL, 0x3A1F441AUL, 0x392F441AUL, 0x383F441AUL };
+const uint8_t DB_HEADER_COUNT = sizeof(DB_HEADERS) / sizeof(DB_HEADERS[0]);
 
 // ---- NEC (Yamaha) ----
 const uint16_t NEC_REPEAT_MS = 108;         // start of the frame / of a repeat code to the start of the next
@@ -53,7 +68,7 @@ const uint8_t  NEC_TAP_REPEATS = 0;         // repeat codes after the frame for 
 #define NEC_HOLD_FULL_FRAME 1
 const uint16_t NEC_HOLD_FRAME_MS = 120;     // start of one full frame to the start of the next
 
-// ---- Sony SIRC re-send of unmapped codes ----
+// ---- Sony SIRC ----
 // 1 = send one complete press (3 frames, exactly 45 ms apart) after the Sony key has been released: the same
 //     way the frequency scan sent it, without overlap with the original remote. Holding such a key does not repeat it.
 // 0 = start at once and keep sending a frame every 45 ms while the key is held (less exact timing).
@@ -62,10 +77,11 @@ const uint16_t SONY_FRAME_MS = 45;          // frame start to frame start (SIRC)
 const uint8_t  SONY_MIN_FRAMES = 3;         // SIRC commands are sent at least three times
 const uint16_t RELEASE_FWD_MS = 150;        // no frame of that key for this long = released
 
-// ---- Sony remote: no frame for this long = key released ----
+// ---- when is a key released? (no frame of that key for this long) ----
 const uint16_t RELEASE_SINGLE_MS = 120;     // keys with repeat = false (nothing is sent in the meantime)
 const uint16_t RELEASE_HELD_MS = 200;       // Dreambox keys with repeat = true (our own sending makes us miss frames)
 const uint16_t RELEASE_NEC_HELD_MS = 220;   // Yamaha keys with repeat = true
+const uint16_t RELEASE_REMOTE_MS = 300;     // keys of the Yamaha and Dreambox remotes: their frames come only every 108-118 ms
 
 // ---- Dreambox key codes ----
 const uint8_t K_MENU = 32, K_EXIT = 82, K_OK = 37, K_LEFT = 35, K_RIGHT = 36;
@@ -74,40 +90,56 @@ const uint8_t K_YELLOW = 66;
 const uint8_t K_UP = 33, K_DOWN = 34;
 
 // ---------------- the rules ----------------
-enum Out : uint8_t { OUT_DREAMBOX, OUT_NEC };
+enum In  : uint8_t { IN_SONY, IN_NEC, IN_DREAMBOX };            // which remote sends the key
+enum Out : uint8_t { OUT_DREAMBOX, OUT_NEC, OUT_SONY };         // where the converted key goes
 
 struct Rule {
-  uint8_t  sonyBits;
-  uint32_t sonyValue;
-  Out      out;
-  uint32_t outValue;
-  bool     repeat;
+  In       in;          // IN_SONY, IN_NEC (Yamaha remote) or IN_DREAMBOX
+  uint8_t  inBits;      // Sony: 12, 15 or 20.  NEC: 32.  Dreambox: 0
+  uint32_t inValue;     // Sony: value printed by the sketch.  NEC: the 32-bit word.  Dreambox: key code
+  Out      out;         // OUT_DREAMBOX, OUT_NEC or OUT_SONY
+  uint32_t outValue;    // Dreambox: key code (K_MENU ...).  NEC: 32-bit word.  Sony: value
+  bool     repeat;      // true = continuous while the key is held (volume)
+  uint8_t  outBits;     // OUT_SONY only: 12, 15 or 20 (leave out for the other outputs)
 };
 
 const Rule RULES[] = {
-  // Sony bits, Sony value, output,       output value,  continuous?
-  // ---- Sony -> Yamaha amplifier (NEC) ----
-  { 12, 0x092,  OUT_NEC,      0xE51A857AUL,  true  },   // Sony Volume up   -> Yamaha Volume up   (continuous)
-  { 12, 0x093,  OUT_NEC,      0xE41B857AUL,  true  },   // Sony Volume down -> Yamaha Volume down (continuous)
-  { 12, 0x097,  OUT_NEC,      0x7788857AUL,  false },   // Sony Audio       -> Yamaha Stereo
-  { 15, 0x4BA8, OUT_NEC,      0x748B857AUL,  false },   // Sony Subtitle    -> Yamaha Movie
-  { 15, 0x624D, OUT_NEC,      0x6A95857AUL,  false },   // Sony Help        -> Yamaha Night
-  { 12, 0x094,  OUT_NEC,      0xE31C857AUL,  false },   // Sony Mute        -> Yamaha Mute
-  { 15, 0x0D73, OUT_NEC,      0xE21D857AUL,  false },   // Sony DVR         -> Yamaha Power on
-  { 15, 0x525B, OUT_NEC,      0xE11E857AUL,  false },   // Sony Guide       -> Yamaha Power off
-  // ---- Sony -> Dreambox ----
-  { 12, 0x0BB,  OUT_DREAMBOX, K_EXIT,        false },   // Sony Jump        -> Dreambox Exit
-  { 15, 0x4BA7, OUT_DREAMBOX, K_LEFT,        false },   // Sony Yellow      -> Dreambox Left
-  { 15, 0x4BA4, OUT_DREAMBOX, K_DOWN,        false },   // Sony Blue        -> Dreambox Down
-  { 15, 0x4BA5, OUT_DREAMBOX, K_UP,          false },   // Sony Red         -> Dreambox Up
-  { 15, 0x4BA6, OUT_DREAMBOX, K_RIGHT,       false },   // Sony Green       -> Dreambox Right
-  { 15, 0x0D7C, OUT_DREAMBOX, K_OK,          false },   // Sony Netflix     -> Dreambox OK
-  { 15, 0x6246, OUT_DREAMBOX, K_YELLOW,      false },   // Sony Google Play -> Dreambox Yellow
-  { 12, 0x090,  OUT_DREAMBOX, K_VOL_UP,      true  },   // Sony CH+         -> Dreambox Volume up   (continuous)
-  { 12, 0x091,  OUT_DREAMBOX, K_VOL_DOWN,    true  },   // Sony CH-         -> Dreambox Volume down (continuous)
-  { 15, 0x3BCD, OUT_DREAMBOX, K_YELLOW,      false },   // Sony 3D          -> Dreambox Yellow
+  // from,    bits, value,  to,           value,         continuous?
+  // ---- Sony remote -> Yamaha amplifier (NEC) ----
+  { IN_SONY, 12, 0x092,  OUT_NEC,      0xE51A857AUL,  true  },   // Sony Volume up   -> Yamaha Volume up   (continuous)
+  { IN_SONY, 12, 0x093,  OUT_NEC,      0xE41B857AUL,  true  },   // Sony Volume down -> Yamaha Volume down (continuous)
+  { IN_SONY, 12, 0x097,  OUT_NEC,      0x7788857AUL,  false },   // Sony Audio       -> Yamaha Stereo
+  { IN_SONY, 15, 0x4BA8, OUT_NEC,      0x748B857AUL,  false },   // Sony Subtitle    -> Yamaha Movie
+  { IN_SONY, 15, 0x624D, OUT_NEC,      0x6A95857AUL,  false },   // Sony Help        -> Yamaha Night
+  { IN_SONY, 12, 0x094,  OUT_NEC,      0xE31C857AUL,  false },   // Sony Mute        -> Yamaha Mute
+  { IN_SONY, 15, 0x0D73, OUT_NEC,      0xE21D857AUL,  false },   // Sony DVR         -> Yamaha Power on
+  { IN_SONY, 15, 0x525B, OUT_NEC,      0xE11E857AUL,  false },   // Sony Guide       -> Yamaha Power off
+  // ---- Sony remote -> Dreambox ----
+  { IN_SONY, 12, 0x0BB,  OUT_DREAMBOX, K_EXIT,        false },   // Sony Jump        -> Dreambox Exit
+  { IN_SONY, 15, 0x4BA7, OUT_DREAMBOX, K_VOL_DOWN,    true  },   // Sony Yellow      -> Dreambox Volume down (continuous)
+  { IN_SONY, 15, 0x4BA4, OUT_DREAMBOX, K_DOWN,        false },   // Sony Blue        -> Dreambox Down
+  { IN_SONY, 15, 0x4BA5, OUT_DREAMBOX, K_UP,          false },   // Sony Red         -> Dreambox Up
+  { IN_SONY, 15, 0x4BA6, OUT_DREAMBOX, K_VOL_UP,      true  },   // Sony Green       -> Dreambox Volume up   (continuous)
+  { IN_SONY, 15, 0x0D7C, OUT_DREAMBOX, K_OK,          false },   // Sony Netflix     -> Dreambox OK
+  { IN_SONY, 15, 0x6246, OUT_DREAMBOX, K_YELLOW,      false },   // Sony Google Play -> Dreambox Yellow
+  { IN_SONY, 12, 0x090,  OUT_DREAMBOX, K_RIGHT,       false },   // Sony CH+         -> Dreambox Right
+  { IN_SONY, 12, 0x091,  OUT_DREAMBOX, K_LEFT,        false },   // Sony CH-         -> Dreambox Left
+  { IN_SONY, 15, 0x3BCD, OUT_DREAMBOX, K_YELLOW,      false },   // Sony 3D          -> Dreambox Yellow
+
+  // ---- Yamaha remote -> other devices (examples, remove the // to use them; learn the NEC word of a key from the Serial Monitor) ----
+  // { IN_NEC, 32, 0xE31C857AUL, OUT_DREAMBOX, K_MENU,   false },   // Yamaha Mute     -> Dreambox Menu
+  // { IN_NEC, 32, 0xE31C857AUL, OUT_SONY,     0x094,    false, 12 }, // Yamaha Mute     -> Sony TV Mute
+
+  // ---- Dreambox remote -> other devices (examples; the key code is printed by the sketch) ----
+  // { IN_DREAMBOX, 0, 37, OUT_NEC,  0xE51A857AUL, false },          // Dreambox OK     -> Yamaha Volume up
+  // { IN_DREAMBOX, 0, 32, OUT_SONY, 0x094,        false, 12 },      // Dreambox Menu   -> Sony TV Mute
 };
 const uint8_t RULE_COUNT = sizeof(RULES) / sizeof(RULES[0]);
+
+// An unmapped key of the Yamaha or Dreambox remote becomes a temporary rule that sends the same code back out.
+Rule dynRule = { IN_NEC, 0, 0, OUT_NEC, 0, true, 0 };
+const Rule &ruleAt(int8_t i) { return (i == (int8_t)RULE_COUNT) ? dynRule : RULES[i]; }
+bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY; }
 
 // --------------------------------------------------
 // Timer3 hardware PWM on pin 5 (OC3A)
@@ -185,6 +217,8 @@ void idle(uint32_t us) {
 }
 
 // ---------------- Dreambox ----------------
+uint32_t txHeader = HEADER_FRAME;       // header frame used for sending (a forwarded key keeps the header of its remote)
+
 void sendDreamboxFrame(uint32_t word) {
   burst(MARK_US);
   for (int8_t i = 7; i >= 0; i--) {
@@ -204,7 +238,7 @@ uint32_t dreamboxKeyFrame(uint8_t key, uint8_t flags) {
 // One pair = header frame + key frame. flags: FLAG_DOWN, FLAG_REPEAT or FLAG_UP.
 void dreamboxPair(uint8_t key, uint8_t flags) {
   digitalWrite(STATUS_LED, HIGH);
-  sendDreamboxFrame(HEADER_FRAME);
+  sendDreamboxFrame(txHeader);
   idle(PAIR_GAP_US - MARK_US);
   sendDreamboxFrame(dreamboxKeyFrame(key, flags));
   digitalWrite(STATUS_LED, LOW);
@@ -221,7 +255,7 @@ void dreamboxSequence(uint8_t key) {
   dreamboxPair(key, FLAG_UP);
 }
 
-// ---------------- Sony SIRC (pass-through of unmapped codes) ----------------
+// ---------------- Sony SIRC ----------------
 // Start: 2400 us burst + 600 us space. Bit 0: 600 us burst, bit 1: 1200 us burst, each followed by 600 us space.
 // Bits are sent least significant first, exactly as they were received.
 void sendSonyFrame(uint8_t bits, uint32_t value) {
@@ -365,19 +399,68 @@ bool captureFrame() {
   return true;
 }
 
-// ---------------- key state: one Sony key at a time ----------------
-int8_t activeRule = -1;        // rule of the Sony key that is down right now, -1 = none
-uint32_t lastFrameAt = 0;      // time of the last Sony frame of that key
+// NEC full frame (Yamaha remote): 9 ms + 4.5 ms leader, 32 bits.
+bool decodeNec(uint32_t *word) {
+  if (rawLen < 67) return false;
+  uint32_t w = 0;
+  for (uint8_t i = 0; i < 32; i++) {
+    if (raw[3 + 2 * i] > 1100) w |= 1UL << i;       // 1688 us space = 1, 562 us space = 0
+  }
+  *word = w;
+  return true;
+}
+
+// Dreambox frame: 9 short bursts, the 8 intervals between them are 8 nibbles (see docs/dreambox-ir-protocol.md).
+bool decodeDreambox(uint32_t *word) {
+  if (rawLen != 17 || raw[0] > 700) return false;
+  uint32_t w = 0;
+  uint8_t sum = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    uint32_t t = (uint32_t)raw[2 * i] + raw[2 * i + 1];   // start of one burst to the start of the next
+    uint32_t units = t * 27UL / 2UL;                       // timer units used by the Dreambox module
+    if (units <= 12188UL || units >= 41517UL) return false;
+    uint8_t n = (uint8_t)(((units - 12189UL) / 1833UL) & 0x0F);
+    w = (w << 4) | n;
+    sum += n;
+  }
+  if (sum & 0x0F) return false;                            // the nibble sum must be a multiple of 16
+  *word = w;
+  return true;
+}
+
+bool isDreamboxHeader(uint32_t w) {
+  for (uint8_t i = 0; i < DB_HEADER_COUNT; i++) {
+    if (DB_HEADERS[i] == w) return true;
+  }
+  return false;
+}
+
+// ---------------- key state: one key at a time ----------------
+int8_t activeRule = -1;        // rule of the key that is down right now, -1 = none, RULE_COUNT = temporary rule
+uint32_t lastFrameAt = 0;      // time of the last frame of that key
 uint32_t lastSendAt = 0;       // start time of the last code sent for that key
 uint8_t sentRepeats = 0;       // Dreambox repeat pairs sent for that key
+bool holdEvidence = false;     // the original key was seen again (second frame or repeat code)
+
+uint16_t releaseMs(const Rule &r) {
+  uint16_t t;
+  if (!isHeld(r)) t = RELEASE_SINGLE_MS;
+  else t = (r.out == OUT_DREAMBOX) ? RELEASE_HELD_MS : RELEASE_NEC_HELD_MS;
+  if (r.in != IN_SONY && t < RELEASE_REMOTE_MS) t = RELEASE_REMOTE_MS;
+  return t;
+}
 
 void runSingle(const Rule &r) {
   LOG("  send: single action");
   if (r.out == OUT_DREAMBOX) dreamboxSequence((uint8_t)r.outValue);
-  else sendNecTap(r.outValue);
+  else if (r.out == OUT_NEC) sendNecTap(r.outValue);
+  else {
+    sendSonyPress(r.outBits, r.outValue);
+    setCarrier(CARRIER_KHZ);
+  }
 }
 
-// Key goes down on a rule with repeat = true: send the first code at once.
+// Key goes down on a continuous rule: send the first code at once.
 void startHeld(const Rule &r) {
   LOG("  send: key down (held key)");
   uint32_t t0 = millis();
@@ -390,8 +473,8 @@ void startHeld(const Rule &r) {
 // Complete whatever the active key still owes the devices, then forget it.
 void finishActive() {
   if (activeRule < 0) return;
-  const Rule &r = RULES[activeRule];
-  if (!r.repeat) {
+  const Rule &r = ruleAt(activeRule);
+  if (!isHeld(r)) {
     runSingle(r);                                   // single action that was waiting for the key release
   } else if (r.out == OUT_DREAMBOX) {
     while (sentRepeats < DREAMBOX_MIN_REPEATS) {
@@ -409,19 +492,19 @@ void finishActive() {
 // Called on every pass of loop(): repeats while held, completes the press at the release.
 void serviceActive() {
   if (activeRule < 0) return;
-  const Rule &r = RULES[activeRule];
+  const Rule &r = ruleAt(activeRule);
   uint32_t now = millis();
   uint32_t quiet = (uint32_t)(now - lastFrameAt);
+  bool released = quiet > releaseMs(r);
 
-  if (!r.repeat) {
-    if (quiet > RELEASE_SINGLE_MS) {                // key released: do the single action now
+  if (!isHeld(r)) {
+    if (released) {                                 // key released: do the single action now
       runSingle(r);
       activeRule = -1;
     }
     return;
   }
 
-  bool released = quiet > (r.out == OUT_DREAMBOX ? RELEASE_HELD_MS : RELEASE_NEC_HELD_MS);
   if (r.out == OUT_DREAMBOX) {
     if (!released || sentRepeats < DREAMBOX_MIN_REPEATS) {
       if ((uint32_t)(now - lastSendAt) >= DREAMBOX_REPEAT_MS) {
@@ -437,6 +520,7 @@ void serviceActive() {
     }
   } else {
     if (!released) {
+      if (r.in == IN_NEC && !holdEvidence) return;  // a tap on the Yamaha remote sends one frame: do not repeat it
 #if NEC_HOLD_FULL_FRAME
       if ((uint32_t)(now - lastSendAt) >= NEC_HOLD_FRAME_MS) {
         LOG("  send: NEC full frame again (key held)");
@@ -457,35 +541,59 @@ void serviceActive() {
   }
 }
 
+// Make a rule the active one and start it.
+void activate(int8_t idx) {
+  const Rule &r = ruleAt(idx);
+  activeRule = idx;
+  lastFrameAt = millis();
+  holdEvidence = false;
+  if (isHeld(r)) startHeld(r);
+}
+
+uint8_t lastIn = 255;
 uint8_t lastBits = 0;
 uint32_t lastValue = 0;
 uint32_t lastUnknownAt = 0;
+uint32_t lastDbHeader = HEADER_FRAME;      // header of the last Dreambox remote key
 
-void onSony(uint8_t bits, uint32_t value) {
+// A key of any remote has been received.
+void onKey(In in, uint8_t bits, uint32_t value) {
   uint32_t now = millis();
   int8_t found = -1;
   for (uint8_t i = 0; i < RULE_COUNT; i++) {
-    if (RULES[i].sonyBits == bits && RULES[i].sonyValue == value) { found = i; break; }
+    if (RULES[i].in == in && RULES[i].inBits == bits && RULES[i].inValue == value) { found = i; break; }
   }
 
-  if (found >= 0 && found == activeRule) {          // the same key is still down
-    lastFrameAt = now;
-    return;
+  if (activeRule >= 0) {                            // the same key is still down?
+    const Rule &a = ruleAt(activeRule);
+    if (a.in == in && a.inBits == bits && a.inValue == value) {
+      lastFrameAt = now;
+      holdEvidence = true;
+      return;
+    }
   }
-  if (found < 0 && fwdActive && bits == fwdBits && value == fwdValue) {   // the same unmapped key is still down
-    fwdLastFrameAt = now;
+  if (in == IN_SONY && found < 0 && fwdActive && bits == fwdBits && value == fwdValue) {
+    fwdLastFrameAt = now;                           // the same unmapped Sony key is still down
     return;
   }
 
 #if USE_SERIAL
-  bool newUnknown = (bits != lastBits) || (value != lastValue) || ((uint32_t)(now - lastUnknownAt) > 250UL);
-  if (found >= 0 || newUnknown) {
-    Serial.print(F("SONY bits=")); Serial.print(bits);
-    Serial.print(F(" value=0x")); Serial.print(value, HEX);
-    Serial.println(found >= 0 ? F("  -> rule found") : F("  -> no rule (forwarded)"));
+  bool newKey = ((uint8_t)in != lastIn) || (bits != lastBits) || (value != lastValue) || ((uint32_t)(now - lastUnknownAt) > 250UL);
+  if (found >= 0 || newKey) {
+    if (in == IN_SONY) {
+      Serial.print(F("SONY bits=")); Serial.print(bits);
+      Serial.print(F(" value=0x")); Serial.print(value, HEX);
+    } else if (in == IN_NEC) {
+      Serial.print(F("YAMAHA remote  NEC word=0x")); Serial.print(value, HEX);
+    } else {
+      Serial.print(F("DREAMBOX remote  key=")); Serial.print(value);
+      Serial.print(F(" header=0x")); Serial.print(lastDbHeader, HEX);
+    }
+    Serial.println(found >= 0 ? F("  -> rule found") : F("  -> no rule (passed on)"));
     Serial.flush();
   }
 #endif
+  lastIn = (uint8_t)in;
   lastBits = bits;
   lastValue = value;
   lastUnknownAt = now;
@@ -494,9 +602,27 @@ void onSony(uint8_t bits, uint32_t value) {
 #if DEBUG_LED
     blink(3, 50);
 #endif
-    finishActive();                                 // complete the previous mapped key first
+    if (in == IN_SONY) {
+#if FORWARD_SONY_REMOTE
+      finishActive();                               // complete the previous mapped key first
+      finishForward();
+      startForward(bits, value);                    // no rule: send the Sony code on, unchanged
+#endif
+      return;
+    }
+    bool pass = (in == IN_NEC) ? (FORWARD_YAMAHA_REMOTE != 0) : (FORWARD_DREAMBOX_REMOTE != 0);
+    if (!pass) return;
     finishForward();
-    startForward(bits, value);                      // no rule: send the Sony code on, unchanged
+    finishActive();
+    dynRule.in = in;                                // identity rule: the same code goes back out
+    dynRule.inBits = bits;
+    dynRule.inValue = value;
+    dynRule.out = (in == IN_NEC) ? OUT_NEC : OUT_DREAMBOX;
+    dynRule.outValue = value;
+    dynRule.repeat = true;
+    dynRule.outBits = 0;
+    txHeader = lastDbHeader;                        // keep the header of the Dreambox remote
+    activate((int8_t)RULE_COUNT);
     return;
   }
 
@@ -505,9 +631,47 @@ void onSony(uint8_t bits, uint32_t value) {
 #if DEBUG_LED
   blink(2, 150);
 #endif
-  activeRule = found;
+  txHeader = HEADER_FRAME;
+  activate(found);
+}
+
+// A repeat code of the Yamaha remote: the last Yamaha key is still held.
+void onNecRepeat() {
+  if (activeRule < 0) return;
+  if (ruleAt(activeRule).in != IN_NEC) return;
   lastFrameAt = millis();
-  if (RULES[found].repeat) startHeld(RULES[found]);
+  holdEvidence = true;
+}
+
+// The Dreambox remote has released a key.
+void onDreamboxUp(uint8_t key) {
+  if (activeRule < 0) return;
+  const Rule &a = ruleAt(activeRule);
+  if (a.in != IN_DREAMBOX || a.inValue != key) return;
+  lastFrameAt = millis() - 1000UL;                  // released now
+}
+
+// Header frame + key frame make one Dreambox key event.
+bool dbHaveHeader = false;
+uint32_t dbHeader = 0;
+uint32_t dbHeaderAt = 0;
+
+void onDreamboxFrame(uint32_t w) {
+  if (isDreamboxHeader(w)) {
+    dbHeader = w;
+    dbHeaderAt = millis();
+    dbHaveHeader = true;                            // no printing here: the key frame follows 13 ms later
+    return;
+  }
+  if ((w & 0xC06C80FFUL) != 0) return;              // not a key frame
+  if (!dbHaveHeader || (uint32_t)(millis() - dbHeaderAt) > 60UL) return;
+  dbHaveHeader = false;
+  uint8_t key = (uint8_t)((w >> 8) & 0x7F);
+  uint8_t flags = (uint8_t)((w >> 20) & 0x0F);
+  lastDbHeader = dbHeader;
+  if (flags == FLAG_UP) { onDreamboxUp(key); return; }
+  if (flags != FLAG_DOWN && flags != FLAG_REPEAT) return;
+  onKey(IN_DREAMBOX, 0, key);
 }
 
 void handleFrame() {
@@ -532,16 +696,20 @@ void handleFrame() {
     for (uint8_t i = 0; i != bits; i++) {
       if (raw[2 + 2 * i] > thr) v |= 1UL << i;
     }
-#if USE_SERIAL
-    Serial.print(F("start=")); Serial.print(raw[0]);
-    Serial.print(F(" marks min=")); Serial.print(mn);
-    Serial.print(F(" max=")); Serial.print(mx);
-    Serial.print(F(" thr=")); Serial.println(thr);
-#endif
-    onSony(bits, v);
+    onKey(IN_SONY, bits, v);
+  } else if (raw[0] > 7000 && raw[0] < 11000) {         // NEC leader (9 ms): Yamaha remote
+    uint32_t w;
+    if (rawLen >= 67) {
+      if (decodeNec(&w)) onKey(IN_NEC, 32, w);
+    } else if (rawLen <= 10 && raw[1] > 1500 && raw[1] < 3200) {
+      onNecRepeat();                                    // 9 ms + 2.25 ms: NEC repeat code
+    }
+  } else if (raw[0] < 700 && rawLen == 17) {            // short bursts: Dreambox remote
+    uint32_t w;
+    if (decodeDreambox(&w)) onDreamboxFrame(w);
   } else {
 #if DEBUG_LED
-    blink(1, 60);                                       // 1 blink = a frame that is not Sony
+    blink(1, 60);                                       // 1 blink = a frame that is not recognised
 #endif
   }
 }

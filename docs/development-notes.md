@@ -28,7 +28,7 @@ The reason why the other hardware variants failed was not found.
 ## Sony re-send
 
 Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts, each followed by 600 us. A 40 kHz re-send did not make the author's TV react
-(the receiver light of the TV did not blink); the sketch now uses 38 kHz like everything else. Whether the TV reacts to the 38 kHz re-send has not been confirmed yet.
+(the receiver light of the TV did not blink); versions 1.3 and 1.4 used 38 kHz and the TV did not react either. The carrier was not the cause (see the findings below and version 1.5): what made the difference was the exact 45 ms frame timing, no overlap with the original remote, and the LED pointing at the TV.
 
 ## Unexplained
 
@@ -43,9 +43,14 @@ Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts,
 * **1.4**: Yamaha hold repeats the full NEC frame about every 120 ms (`NEC_HOLD_FULL_FRAME`, set it to 0 for short repeat codes). **Confirmed working** by the author.
   Unmapped Sony codes were sent at least three times, 45 ms apart, and kept going while the original key was held. The TV still did not react.
   A simulator run shows about 135 ms between full NEC frames and 45 ms between Sony frames, with occasional gaps of 90 ms while the Arduino is busy receiving.
-* **1.5** (not tested on the TV yet): unmapped Sony codes are re-sent after the key is released, as one blocking press of 3 frames started exactly 45 ms apart,
+* **1.5** (**confirmed working** on the TV by the author): unmapped Sony codes are re-sent after the key is released, as one blocking press of 3 frames started exactly 45 ms apart,
   the way the frequency scan sent them. The carrier is 40 kHz for these frames and returns to 38 kHz afterwards. Option `SONY_FORWARD_AFTER_RELEASE 0` starts at once and repeats while the key is held.
   A press of another mapped key that arrives while the Arduino is sending is not seen (the Arduino does not receive while it transmits).
+
+* **1.6**: functions of Sony Green and CH+ swapped, and of Sony Yellow and CH- swapped. Green and Yellow are now the continuous Dreambox volume up and down; CH+ and CH- send Dreambox Right and Left (single actions).
+
+* **2.0** (simulator only, not tested on the devices yet): the sketch receives the Yamaha remote (NEC) and the Dreambox remote as well as the Sony remote, and rules can map any of them to any device (`IN_SONY`, `IN_NEC`, `IN_DREAMBOX` to `OUT_DREAMBOX`, `OUT_NEC`, `OUT_SONY`).
+  Keys without a rule are passed on to their own device. Switches `FORWARD_SONY_REMOTE`, `FORWARD_YAMAHA_REMOTE`, `FORWARD_DREAMBOX_REMOTE` turn the passing on or off per remote (placement B in the README).
 
 ## Sony re-send: what the tests showed
 
@@ -55,3 +60,14 @@ Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts,
   The receiver only reports the envelope, not the carrier frequency of the real remote.
 * **Frequency scan** (`tools/ir_sony_freq_scan`): with the IR LED 2 to 3 cm from the TV's IR window, the TV reacted to Mute at every carrier frequency from 36 to 42 kHz when the press was sent as 3 frames exactly 45 ms apart.
   So the carrier frequency within this range does not matter for this TV; geometry (the LED must point at the TV's IR window) and exact frame timing do.
+
+## Design notes for version 2.0
+
+* **Classification of a received frame** is by its first burst: about 2400 us = Sony, about 9000 us = NEC (a full frame has 67 or more durations, a repeat code 3), under 700 us with 17 durations = Dreambox.
+* **Dreambox remote**: a key is a header frame and a key frame, only about 13 ms apart. The sketch does not print or transmit between the two, otherwise it would miss the key frame.
+  The key frame is decoded with the module's own rules (interval to nibble, nibble sum multiple of 16, mask `0xC06C80FF`). An up pair ends the key at once; without it the key ends 300 ms after the last pair.
+  A forwarded key keeps the header of the remote, then follows the normal hold engine: down pair, repeat pairs every 118 ms, up pair.
+* **Yamaha remote**: a tap sends one frame, so a forwarded key is repeated only after the remote has been seen again (a second frame or a repeat code). The sketch cannot see a repeat code that arrives while it is transmitting (a full frame takes 68 ms),
+  so the first repeat of a held key is usually missed and the amplifier receives the second frame about 160 ms after the first, then every 120 ms. How the real remote behaves when held has not been captured.
+* **The Arduino does not receive while it transmits.** Own transmissions are not mistaken for a key, because the receiver is not listened to while sending.
+* **Release timeouts** (no frame of the key for this long): Sony remote 120 ms (single) / 200-220 ms (continuous), Yamaha and Dreambox remotes 300 ms (their frames come only every 108 to 118 ms).

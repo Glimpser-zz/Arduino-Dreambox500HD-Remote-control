@@ -14,14 +14,14 @@ Sony 12/15/20-bit SIRC codes: the value is the transmitted bits, least significa
 | DVR | 15 | `0x0D73` | 26 / 115 | Yamaha amplifier (NEC) | Yamaha Power on (`0xE21D857A`) | no |
 | Guide | 15 | `0x525B` | 164 / 91 | Yamaha amplifier (NEC) | Yamaha Power off (`0xE11E857A`) | no |
 | Jump | 12 | `0x0BB` | 1 / 59 | Dreambox | Dreambox Exit | no |
-| Yellow | 15 | `0x4BA7` | 151 / 39 | Dreambox | Dreambox Left | no |
+| Yellow | 15 | `0x4BA7` | 151 / 39 | Dreambox | Dreambox Volume down | yes |
 | Blue | 15 | `0x4BA4` | 151 / 36 | Dreambox | Dreambox Down | no |
 | Red | 15 | `0x4BA5` | 151 / 37 | Dreambox | Dreambox Up | no |
-| Green | 15 | `0x4BA6` | 151 / 38 | Dreambox | Dreambox Right | no |
+| Green | 15 | `0x4BA6` | 151 / 38 | Dreambox | Dreambox Volume up | yes |
 | Netflix | 15 | `0x0D7C` | 26 / 124 | Dreambox | Dreambox OK | no |
 | Google Play | 15 | `0x6246` | 196 / 70 | Dreambox | Dreambox Yellow | no |
-| CH+ | 12 | `0x090` | 1 / 16 | Dreambox | Dreambox Volume up | yes |
-| CH- | 12 | `0x091` | 1 / 17 | Dreambox | Dreambox Volume down | yes |
+| CH+ | 12 | `0x090` | 1 / 16 | Dreambox | Dreambox Right | no |
+| CH- | 12 | `0x091` | 1 / 17 | Dreambox | Dreambox Left | no |
 | 3D | 15 | `0x3BCD` | 119 / 77 | Dreambox | Dreambox Yellow | no |
 
 Sony codes that are not in this table are re-sent to the TV unchanged (version 1.5: after the key is released, as one press of 3 frames, 45 ms apart, 40 kHz carrier).
@@ -44,3 +44,41 @@ The Yamaha amplifier uses the NEC protocol. The words were learned from the Yama
 
 NEC timing used by the sketch: leader 9 ms burst + 4.5 ms space, bits `562 us` burst + `562 us` (0) or `1688 us` (1) space, stop burst `562 us`;
 while a key is held, version 1.4 sends the full frame again about every 120 ms. (Up to version 1.3 it sent short repeat codes, 9 ms burst + 2.25 ms space + 562 us burst, every 108 ms; the amplifier did not keep changing the volume with them. Set `NEC_HOLD_FULL_FRAME` to 0 to get them back.)
+
+## Rules for the Yamaha and Dreambox remotes (version 2.0)
+
+Every rule in the `RULES` table of the sketch has the same fields:
+
+```
+{ remote, bits, value, target, value, continuous, bits-for-Sony-target }
+```
+
+| Field | Sony remote | Yamaha remote | Dreambox remote |
+|---|---|---|---|
+| `remote` | `IN_SONY` | `IN_NEC` | `IN_DREAMBOX` |
+| `bits` | 12, 15 or 20 | 32 | 0 |
+| `value` | value printed by the sketch | NEC word printed by the sketch | Dreambox key code printed by the sketch |
+
+| Target | `target` | value | last field |
+|---|---|---|---|
+| Dreambox | `OUT_DREAMBOX` | key code, for example `K_MENU` | not used |
+| Yamaha amplifier | `OUT_NEC` | NEC word | not used |
+| Sony TV | `OUT_SONY` | Sony value | 12, 15 or 20 (bits) |
+
+With `USE_SERIAL 1` the sketch prints the code of every key it receives, for example:
+
+```
+SONY bits=12 value=0x94  -> rule found
+YAMAHA remote  NEC word=0xE31C857A  -> no rule (passed on)
+DREAMBOX remote  key=37 header=0xB3F441A  -> no rule (passed on)
+```
+
+Examples (they are in the sketch as comments):
+
+```
+{ IN_NEC,      32, 0xE31C857AUL, OUT_DREAMBOX, K_MENU,        false },        // Yamaha Mute   -> Dreambox Menu
+{ IN_NEC,      32, 0x7788857AUL, OUT_SONY,     0x094,         false, 12 },    // Yamaha Stereo -> Sony TV Mute
+{ IN_DREAMBOX, 0,  37,           OUT_NEC,      0xE51A857AUL,  false },        // Dreambox OK   -> Yamaha Volume up
+```
+
+`continuous = true` makes a key repeat while it is held (for Dreambox and Yamaha targets); a Sony target is always one press.
