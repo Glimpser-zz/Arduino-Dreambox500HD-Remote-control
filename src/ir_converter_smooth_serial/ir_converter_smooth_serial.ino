@@ -1,11 +1,16 @@
-// ir_converter_smooth_serial | version 2.0 | build date 2026-11-06 | three remotes (Sony, Yamaha, Dreambox) | carrier: hardware timer (Timer3, pin 5)
+// ir_converter_smooth_serial | version 3.0 | build date 2026-11-17 | IR converter (Sony, Yamaha, Dreambox) + climate control | IR carrier: hardware timer (Timer3, pin 3)
 #include <Arduino.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
+#include <LiquidCrystal.h>
+#include <EEPROM.h>
 
 // IR converter and repeater - Arduino Mega 2560, hardware carrier from Timer3
 // Receives the Sony TV remote, the Yamaha amplifier remote and the Dreambox remote with one KY-022 receiver (pin 52).
-// Sends to the Sony TV, the Yamaha amplifier and the Dreambox with one IR LED + driver (pin 5).
+// Sends to the Sony TV, the Yamaha amplifier and the Dreambox with one IR LED + driver (pin 3, Timer3 output OC3C).
+//
+// Version 3.0 adds a thermostat: AM2302 (DHT22) temperature and humidity sensor, a 2-channel relay module for heating and cooling,
+// and the DFRobot LCD keypad shield for the display and the settings (see the CLIMATE section further down).
 //
 // For every key that is received:
 //   - if it has a rule in the RULES table below, the rule is executed (conversion between remotes);
@@ -37,7 +42,7 @@
 #endif
 
 const uint8_t RX_PIN = 52;
-const uint8_t TX_PIN = 5;              // OC3A / Timer3
+const uint8_t TX_PIN = 3;              // OC3C / Timer3 (moved from pin 5: the LCD keypad shield uses pins 4 to 10)
 const uint8_t STATUS_LED = 13;
 const uint16_t CARRIER_KHZ = 38;             // Dreambox and Yamaha
 const uint8_t  SONY_CARRIER_KHZ = 40;          // carrier for Sony codes: 40 kHz is the Sony standard (36 to 42 kHz all worked in the scan)
@@ -142,7 +147,7 @@ const Rule &ruleAt(int8_t i) { return (i == (int8_t)RULE_COUNT) ? dynRule : RULE
 bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY; }
 
 // --------------------------------------------------
-// Timer3 hardware PWM on pin 5 (OC3A)
+// Timer3 hardware PWM on pin 3 (OC3C)
 // --------------------------------------------------
 
 uint8_t currentCarrierKhz = 0;
@@ -160,7 +165,7 @@ void setCarrier(uint8_t khz) {
 
   // Fast PWM mode 14, TOP = ICR3, prescaler = 1.
   ICR3 = (uint16_t)(F_CPU / (khz * 1000UL)) - 1;
-  OCR3A = (ICR3 + 1) / 3;
+  OCR3C = (ICR3 + 1) / 3;
   TCNT3 = 0;
 
   // Start Timer3 with output disconnected.
@@ -187,8 +192,8 @@ void burst(uint16_t us) {
   // Begin each burst at a known timer phase.
   TCNT3 = 0;
 
-  // Connect OC3A in non-inverting PWM mode.
-  TCCR3A |= _BV(COM3A1);
+  // Connect OC3C in non-inverting PWM mode.
+  TCCR3A |= _BV(COM3C1);
 
   SREG = oldSREG;
 
@@ -197,12 +202,12 @@ void burst(uint16_t us) {
   oldSREG = SREG;
   cli();
 
-  // Disconnect OC3A at the end of the burst.
-  TCCR3A &= ~(_BV(COM3A1) | _BV(COM3A0));
+  // Disconnect OC3C at the end of the burst.
+  TCCR3A &= ~(_BV(COM3C1) | _BV(COM3C0));
 
   SREG = oldSREG;
 
-  // Hold pin 5 LOW between bursts.
+  // Hold pin 3 LOW between bursts.
   digitalWrite(TX_PIN, LOW);
 }
 
@@ -704,14 +709,482 @@ void handleFrame() {
     } else if (rawLen <= 10 && raw[1] > 1500 && raw[1] < 3200) {
       onNecRepeat();                                    // 9 ms + 2.25 ms: NEC repeat code
     }
-  } else if (raw[0] < 700 && rawLen == 17) {            // short bursts: Dreambox remote
+  } else if (raw[0] < 700 && rawLen >= 10 && rawLen <= 25) {   // short bursts: Dreambox remote
     uint32_t w;
-    if (decodeDreambox(&w)) onDreamboxFrame(w);
+    if (rawLen == 17 && decodeDreambox(&w)) {
+      onDreamboxFrame(w);
+    } else {
+#if USE_SERIAL
+      Serial.print(F("DREAMBOX-like frame NOT decoded, durations ")); Serial.print(rawLen); Serial.print(F(":"));
+      for (uint8_t i = 0; i < rawLen; i++) { Serial.print(' '); Serial.print(raw[i]); }
+      Serial.println();
+#endif
+    }
   } else {
 #if DEBUG_LED
     blink(1, 60);                                       // 1 blink = a frame that is not recognised
 #endif
   }
+}
+
+
+// ======================================================================
+//  CLIMATE: AM2302 (DHT22) sensor, 2-channel relay module, LCD keypad shield
+// ======================================================================
+// Pins (everything else is used by the IR part: 52 receiver, 3 IR LED, 13 built-in LED):
+//   LCD keypad shield : pins 4, 5, 6, 7, 8, 9 (LCD), 10 (backlight, left alone), A0 (buttons)
+//   AM2302 data       : pin 22   (+5 V, GND; a 10 kohm pull-up between data and +5 V if the module has none)
+//   relay IN1         : pin 23   heating
+//   relay IN2         : pin 24   cooling
+// Buttons: LEFT / RIGHT change the page; on the main page UP / DOWN change the set temperature and SELECT changes
+// the mode (Off, Winter = heating, Summer = cooling); on the settings page SELECT chooses the field, UP / DOWN change it.
+// The IR part always has priority: the sensor is read and the display is written only while no remote key is being handled.
+
+#define CLIMATE_ENABLED 1              // 0 = IR converter only
+#define RELAY_ACTIVE_LOW 1             // the usual 2-channel relay module switches ON when its input is LOW
+
+#if CLIMATE_ENABLED
+
+const uint8_t DHT_PIN = 22;
+const uint8_t RELAY_HEAT_PIN = 23;
+const uint8_t RELAY_COOL_PIN = 24;
+const uint8_t BUTTON_PIN = A0;
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);   // RS, EN, D4, D5, D6, D7 of the DFRobot LCD keypad shield
+
+const uint16_t SENSOR_PERIOD_MS = 5000;
+const uint32_t SENSOR_FAIL_MS = 120000UL;   // no good reading for this long: both relays are switched off
+
+enum { MODE_OFF = 0, MODE_WINTER = 1, MODE_SUMMER = 2 };
+
+// ---------------- settings in EEPROM ----------------
+struct Settings {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  mode;          // MODE_OFF, MODE_WINTER (heating), MODE_SUMMER (cooling)
+  int16_t  setpoint;      // tenths of a degree Celsius
+  int16_t  hysteresis;    // tenths of a degree
+  int16_t  offset;        // sensor offset, tenths of a degree
+  uint16_t minOnS;        // minimum time a relay stays on, seconds
+  uint16_t minOffS;       // minimum time a relay stays off, seconds
+  uint16_t checksum;
+};
+const uint16_t SETTINGS_MAGIC = 0xC1A7;
+const uint8_t SETTINGS_VERSION = 1;
+Settings cfg;
+
+uint16_t settingsChecksum(const Settings &s) {
+  const uint8_t *p = (const uint8_t *)&s;
+  uint16_t sum = 0x55AA;
+  for (uint8_t i = 0; i < sizeof(Settings) - 2; i++) sum = (uint16_t)((sum << 1) | (sum >> 15)) ^ p[i];
+  return sum;
+}
+
+bool settingsValid(const Settings &s) {
+  return s.magic == SETTINGS_MAGIC && s.version == SETTINGS_VERSION && s.mode <= MODE_SUMMER &&
+         s.setpoint >= 50 && s.setpoint <= 350 && s.hysteresis >= 1 && s.hysteresis <= 100 &&
+         s.offset >= -100 && s.offset <= 100 && s.minOnS <= 1800 && s.minOffS <= 3600 &&
+         s.checksum == settingsChecksum(s);
+}
+
+void settingsDefaults() {
+  cfg.magic = SETTINGS_MAGIC;
+  cfg.version = SETTINGS_VERSION;
+  cfg.mode = MODE_OFF;          // safe first start: nothing is switched until the mode is chosen
+  cfg.setpoint = 220;           // 22.0 C
+  cfg.hysteresis = 5;           // 0.5 C
+  cfg.offset = 0;
+  cfg.minOnS = 30;
+  cfg.minOffS = 120;
+  cfg.checksum = 0;
+}
+
+void settingsLoad() {
+  EEPROM.get(0, cfg);
+  if (!settingsValid(cfg)) settingsDefaults();
+}
+
+void settingsSave() {
+  cfg.checksum = settingsChecksum(cfg);
+  EEPROM.put(0, cfg);           // writes only the bytes that changed
+}
+
+bool settingsDirty = false;
+uint32_t settingsDirtyAt = 0;
+void markDirty() { settingsDirty = true; settingsDirtyAt = millis(); }
+
+// ---------------- AM2302 / DHT22 ----------------
+// Counts how many loop passes the line stays at the given level; 0 = timeout.
+uint16_t dhtPulse(uint8_t level) {
+  uint16_t count = 0;
+  while (digitalRead(DHT_PIN) == level) {
+    if (++count > 400) return 0;
+  }
+  return count;
+}
+
+// Reads temperature and humidity in tenths. Takes about 5 ms with interrupts off, so call it only while the IR part is idle.
+bool dhtRead(int16_t *tTenths, int16_t *hTenths) {
+  uint8_t data[5] = { 0, 0, 0, 0, 0 };
+
+  pinMode(DHT_PIN, OUTPUT);
+  digitalWrite(DHT_PIN, LOW);
+  delay(2);                                       // start signal: low for at least 1 ms
+  digitalWrite(DHT_PIN, HIGH);
+  delayMicroseconds(30);
+  pinMode(DHT_PIN, INPUT_PULLUP);
+
+  noInterrupts();
+  bool ok = (dhtPulse(HIGH) != 0)                 // the line is still high for 20 to 40 us
+         && (dhtPulse(LOW) != 0)                  // answer of the sensor: 80 us low
+         && (dhtPulse(HIGH) != 0);                // then 80 us high
+  for (uint8_t i = 0; ok && i < 40; i++) {
+    uint16_t low = dhtPulse(LOW);                 // every bit starts with 50 us low
+    uint16_t high = dhtPulse(HIGH);               // 26 us high = 0, 70 us high = 1
+    if (low == 0 || high == 0) { ok = false; break; }
+    data[i / 8] = (uint8_t)(data[i / 8] << 1);
+    if (high > low) data[i / 8] |= 1;
+  }
+  interrupts();
+  if (!ok) return false;
+
+  if (data[4] != (uint8_t)(data[0] + data[1] + data[2] + data[3])) return false;     // checksum
+  int16_t h = (int16_t)(((uint16_t)data[0] << 8) | data[1]);
+  int16_t t = (int16_t)(((uint16_t)(data[2] & 0x7F) << 8) | data[3]);
+  if (data[2] & 0x80) t = -t;
+  if (h < 0 || h > 1000 || t < -400 || t > 800) return false;
+  *tTenths = t;
+  *hTenths = h;
+  return true;
+}
+
+// ---------------- readings and the 24 hour history ----------------
+int16_t rawT = 0;                     // last good temperature, tenths, without the offset
+int16_t curH = 0;                     // last good humidity, tenths of a percent
+bool haveReading = false;
+uint32_t lastGoodAt = 0;              // millis() of the last good reading (boot time before the first one)
+uint32_t lastSampleAt = 0;
+uint8_t sensorFails = 0;
+
+int16_t curTemp() { return rawT + cfg.offset; }
+
+// One bin per hour, 24 bins. The history is in RAM: it starts again after a power loss.
+const uint8_t HIST_BINS = 24;
+int16_t hTmin[HIST_BINS], hTmax[HIST_BINS], hHmin[HIST_BINS], hHmax[HIST_BINS];
+uint8_t histIndex = 0;                // bin of the current hour
+uint8_t histStarted = 1;              // number of bins that have been started (up to 24)
+uint32_t histHourStart = 0;           // millis() at the start of the current hour
+
+void histClear(uint8_t i) { hTmin[i] = 32767; hTmax[i] = -32768; hHmin[i] = 32767; hHmax[i] = -32768; }
+
+void histAdd(int16_t t, int16_t h) {
+  if (t < hTmin[histIndex]) hTmin[histIndex] = t;
+  if (t > hTmax[histIndex]) hTmax[histIndex] = t;
+  if (h < hHmin[histIndex]) hHmin[histIndex] = h;
+  if (h > hHmax[histIndex]) hHmax[histIndex] = h;
+}
+
+void histService() {
+  while ((uint32_t)(millis() - histHourStart) >= 3600000UL) {
+    histHourStart += 3600000UL;
+    histIndex = (uint8_t)((histIndex + 1) % HIST_BINS);
+    histClear(histIndex);                                  // the oldest hour is dropped
+    if (histStarted < HIST_BINS) histStarted++;
+  }
+}
+
+// Minimum and maximum over the last 24 hours (or since the start, if it was less than 24 hours ago).
+bool histRange(int16_t *tMin, int16_t *tMax, int16_t *hMin, int16_t *hMax) {
+  int16_t a = 32767, b = -32768, c = 32767, d = -32768;
+  for (uint8_t i = 0; i < HIST_BINS; i++) {
+    if (hTmin[i] < a) a = hTmin[i];
+    if (hTmax[i] > b) b = hTmax[i];
+    if (hHmin[i] < c) c = hHmin[i];
+    if (hHmax[i] > d) d = hHmax[i];
+  }
+  if (a == 32767) return false;
+  *tMin = a; *tMax = b; *hMin = c; *hMax = d;
+  return true;
+}
+
+// How much time the history covers, in minutes (at most 24 hours).
+uint16_t histMinutes() {
+  uint32_t m = (uint32_t)(histStarted - 1) * 60UL + (uint32_t)(millis() - histHourStart) / 60000UL;
+  return (uint16_t)(m > 1440UL ? 1440UL : m);
+}
+
+// ---------------- thermostat and relays ----------------
+bool heatOn = false, coolOn = false;
+uint32_t heatChangedAt = 0, coolChangedAt = 0;      // millis() of the last switch; at boot it starts the minimum OFF time
+
+void relayWrite(uint8_t pin, bool on) {
+#if RELAY_ACTIVE_LOW
+  digitalWrite(pin, on ? LOW : HIGH);
+#else
+  digitalWrite(pin, on ? HIGH : LOW);
+#endif
+}
+
+void setHeat(bool on) { if (on == heatOn) return; heatOn = on; heatChangedAt = millis(); relayWrite(RELAY_HEAT_PIN, on); }
+void setCool(bool on) { if (on == coolOn) return; coolOn = on; coolChangedAt = millis(); relayWrite(RELAY_COOL_PIN, on); }
+void forceOff() { setHeat(false); setCool(false); }
+
+bool canTurnOn(uint32_t changedAt)  { return (uint32_t)(millis() - changedAt) >= (uint32_t)cfg.minOffS * 1000UL; }
+bool canTurnOff(uint32_t changedAt) { return (uint32_t)(millis() - changedAt) >= (uint32_t)cfg.minOnS * 1000UL; }
+
+bool sensorFresh() { return haveReading && (uint32_t)(millis() - lastGoodAt) < SENSOR_FAIL_MS; }
+
+// Heating turns on below (set - hysteresis) and off at the set temperature.
+// Cooling turns on above (set + hysteresis) and off at the set temperature.
+// Both relays stay off in mode Off and while there is no good sensor reading.
+void thermostatService() {
+  static uint32_t lastRun = 0;
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastRun) < 1000UL) return;
+  lastRun = now;
+
+  if (!sensorFresh() || cfg.mode == MODE_OFF) { forceOff(); return; }
+  int16_t t = curTemp();
+  if (cfg.mode == MODE_WINTER) {
+    setCool(false);
+    if (!heatOn) { if (t <= cfg.setpoint - cfg.hysteresis && canTurnOn(heatChangedAt)) setHeat(true); }
+    else         { if (t >= cfg.setpoint && canTurnOff(heatChangedAt)) setHeat(false); }
+  } else {
+    setHeat(false);
+    if (!coolOn) { if (t >= cfg.setpoint + cfg.hysteresis && canTurnOn(coolChangedAt)) setCool(true); }
+    else         { if (t <= cfg.setpoint && canTurnOff(coolChangedAt)) setCool(false); }
+  }
+}
+
+void sensorService() {
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastSampleAt) < SENSOR_PERIOD_MS) return;
+  lastSampleAt = now;
+  int16_t t, h;
+  if (dhtRead(&t, &h)) {
+    rawT = t;
+    curH = h;
+    haveReading = true;
+    lastGoodAt = now;
+    sensorFails = 0;
+    histAdd(curTemp(), h);
+  } else if (sensorFails < 255) {
+    sensorFails++;
+  }
+}
+
+// ---------------- buttons ----------------
+enum { BTN_NONE = 0, BTN_RIGHT, BTN_UP, BTN_DOWN, BTN_LEFT, BTN_SELECT };
+
+uint8_t readButton() {
+  int v = analogRead(BUTTON_PIN);
+  if (v < 50) return BTN_RIGHT;
+  if (v < 195) return BTN_UP;
+  if (v < 380) return BTN_DOWN;
+  if (v < 555) return BTN_LEFT;
+  if (v < 790) return BTN_SELECT;
+  return BTN_NONE;
+}
+
+// Returns a button once when it is pressed; UP and DOWN repeat while they are held.
+uint8_t buttonEvent() {
+  static uint8_t lastRaw = BTN_NONE, stable = BTN_NONE;
+  static uint32_t rawAt = 0, lastPoll = 0, repeatAt = 0;
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastPoll) < 10UL) return BTN_NONE;
+  lastPoll = now;
+  uint8_t raw = readButton();
+  if (raw != lastRaw) { lastRaw = raw; rawAt = now; return BTN_NONE; }
+  if ((uint32_t)(now - rawAt) < 30UL) return BTN_NONE;        // debounce
+  if (raw != stable) {
+    stable = raw;
+    if (raw != BTN_NONE) { repeatAt = now + 500UL; return raw; }
+    return BTN_NONE;
+  }
+  if ((raw == BTN_UP || raw == BTN_DOWN) && (int32_t)(now - repeatAt) >= 0) {
+    repeatAt = now + 120UL;
+    return raw;
+  }
+  return BTN_NONE;
+}
+
+// ---------------- pages and settings ----------------
+uint8_t page = 0;                     // 0 main, 1 temperature 24 h, 2 humidity 24 h, 3 settings
+uint8_t field = 0;                    // settings field
+uint32_t lastButtonAt = 0;
+const uint8_t FIELD_COUNT = 6;
+
+void changeSetpoint(int16_t d) {
+  long v = (long)cfg.setpoint + d;
+  cfg.setpoint = (int16_t)(v < 50 ? 50 : (v > 350 ? 350 : v));
+  markDirty();
+}
+
+void changeMode(int8_t dir) {
+  cfg.mode = (uint8_t)((cfg.mode + 3 + dir) % 3);
+  forceOff();                                       // a mode change always starts with both relays off
+  markDirty();
+}
+
+void changeField(int8_t dir) {
+  long v;
+  switch (field) {
+    case 0: changeMode(dir); return;
+    case 1: changeSetpoint(dir * 5); return;
+    case 2: v = (long)cfg.hysteresis + dir;      cfg.hysteresis = (int16_t)(v < 1 ? 1 : (v > 100 ? 100 : v)); break;
+    case 3: v = (long)cfg.offset + dir;          cfg.offset = (int16_t)(v < -100 ? -100 : (v > 100 ? 100 : v)); break;
+    case 4: v = (long)cfg.minOnS + dir * 10L;    cfg.minOnS = (uint16_t)(v < 0 ? 0 : (v > 1800 ? 1800 : v)); break;
+    default: v = (long)cfg.minOffS + dir * 30L;  cfg.minOffS = (uint16_t)(v < 0 ? 0 : (v > 3600 ? 3600 : v)); break;
+  }
+  markDirty();
+}
+
+void uiButtons() {
+  uint8_t b = buttonEvent();
+  uint32_t now = millis();
+  if (b == BTN_NONE) {
+    if (page != 0 && (uint32_t)(now - lastButtonAt) > 30000UL) page = 0;     // back to the main page
+    return;
+  }
+  lastButtonAt = now;
+  if (b == BTN_LEFT)  { page = (uint8_t)((page + 3) % 4); return; }
+  if (b == BTN_RIGHT) { page = (uint8_t)((page + 1) % 4); return; }
+  if (page == 0) {
+    if (b == BTN_UP)     changeSetpoint(5);
+    if (b == BTN_DOWN)   changeSetpoint(-5);
+    if (b == BTN_SELECT) changeMode(1);
+  } else if (page == 3) {
+    if (b == BTN_SELECT) field = (uint8_t)((field + 1) % FIELD_COUNT);
+    else if (b == BTN_UP) changeField(1);
+    else if (b == BTN_DOWN) changeField(-1);
+  }
+}
+
+// ---------------- display ----------------
+char shownLine[2][17];
+
+void fmtTenths(char *out, size_t n, int16_t v) {
+  const char *sign = "";
+  if (v < 0) { sign = "-"; v = (int16_t)-v; }
+  snprintf(out, n, "%s%d.%d", sign, v / 10, v % 10);
+}
+
+void showLine(uint8_t row, const char *text) {
+  char line[17];
+  snprintf(line, sizeof(line), "%-16s", text);               // pad with spaces so nothing old stays on the line
+  if (strcmp(line, shownLine[row]) != 0) {
+    lcd.setCursor(0, row);
+    lcd.print(line);
+    strcpy(shownLine[row], line);
+  }
+}
+
+void coverageText(char *out, size_t n) {
+  uint16_t m = histMinutes();
+  if (m >= 1425) snprintf(out, n, "  24h");
+  else snprintf(out, n, "%2dh%02dm", m / 60, m % 60);
+}
+
+void uiDraw() {
+  char l0[24], l1[24], a[12], b[12], c[8];
+  if (page == 0) {
+    if (!sensorFresh()) {
+      snprintf(l0, sizeof(l0), "T --.-C  H --%%");
+      if (!haveReading && (uint32_t)(millis() - lastGoodAt) < 15000UL) snprintf(l1, sizeof(l1), "Reading sensor..");
+      else snprintf(l1, sizeof(l1), "SENSOR ERROR");
+    } else {
+      fmtTenths(a, sizeof(a), curTemp());
+      snprintf(l0, sizeof(l0), "T %sC  H %d%%", a, (curH + 5) / 10);
+      fmtTenths(b, sizeof(b), cfg.setpoint);
+      if (cfg.mode == MODE_OFF) snprintf(l1, sizeof(l1), "Off  Set %s", b);
+      else snprintf(l1, sizeof(l1), "%s %s %s:%s", cfg.mode == MODE_WINTER ? "Win" : "Sum", b,
+                    cfg.mode == MODE_WINTER ? "HEAT" : "COOL", (cfg.mode == MODE_WINTER ? heatOn : coolOn) ? "ON" : "--");
+    }
+  } else if (page == 1 || page == 2) {
+    int16_t tMin, tMax, hMin, hMax;
+    coverageText(c, sizeof(c));
+    snprintf(l0, sizeof(l0), "%s min/max %s", page == 1 ? "T" : "H", c);
+    if (!histRange(&tMin, &tMax, &hMin, &hMax)) {
+      snprintf(l1, sizeof(l1), "no data yet");
+    } else if (page == 1) {
+      fmtTenths(a, sizeof(a), tMin);
+      fmtTenths(b, sizeof(b), tMax);
+      snprintf(l1, sizeof(l1), "%s / %s C", a, b);
+    } else {
+      snprintf(l1, sizeof(l1), "%d / %d %%", (hMin + 5) / 10, (hMax + 5) / 10);
+    }
+  } else {
+    static const char *const names[FIELD_COUNT] = { "Mode", "Setpoint", "Hysteresis", "Offset", "Min ON", "Min OFF" };
+    snprintf(l0, sizeof(l0), "%d/%d %s", field + 1, FIELD_COUNT, names[field]);
+    switch (field) {
+      case 0: snprintf(l1, sizeof(l1), "%s", cfg.mode == MODE_OFF ? "OFF" : (cfg.mode == MODE_WINTER ? "WINTER heating" : "SUMMER cooling")); break;
+      case 1: fmtTenths(a, sizeof(a), cfg.setpoint);   snprintf(l1, sizeof(l1), "%s C", a); break;
+      case 2: fmtTenths(a, sizeof(a), cfg.hysteresis); snprintf(l1, sizeof(l1), "+/- %s C", a); break;
+      case 3: fmtTenths(a, sizeof(a), cfg.offset);     snprintf(l1, sizeof(l1), "%s C", a); break;
+      case 4: snprintf(l1, sizeof(l1), "%u s", cfg.minOnS); break;
+      default: snprintf(l1, sizeof(l1), "%u s", cfg.minOffS); break;
+    }
+  }
+  showLine(0, l0);
+  showLine(1, l1);
+}
+
+// ---------------- the two service functions called from loop() ----------------
+// Cheap, never blocks: runs on every pass.
+void climateFast() {
+  histService();
+  thermostatService();
+  uiButtons();
+  if (settingsDirty && (uint32_t)(millis() - settingsDirtyAt) > 3000UL) {   // save 3 s after the last change
+    settingsSave();
+    settingsDirty = false;
+  }
+}
+
+// Blocks for a few milliseconds (sensor, display): runs only while the IR part is idle.
+void climateSlow() {
+  sensorService();
+  uiDraw();
+#if USE_SERIAL
+  static uint32_t lastPrint = 0;
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastPrint) >= 30000UL) {
+    lastPrint = now;
+    char a[12];
+    fmtTenths(a, sizeof(a), curTemp());
+    Serial.print(F("CLIMATE T=")); Serial.print(a);
+    Serial.print(F(" H=")); Serial.print((curH + 5) / 10);
+    Serial.print(F(" mode=")); Serial.print(cfg.mode == MODE_OFF ? F("off") : (cfg.mode == MODE_WINTER ? F("winter") : F("summer")));
+    Serial.print(F(" heat=")); Serial.print(heatOn ? F("ON") : F("off"));
+    Serial.print(F(" cool=")); Serial.println(coolOn ? F("ON") : F("off"));
+  }
+#endif
+}
+
+void climateSetup() {
+  digitalWrite(RELAY_HEAT_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);     // relays OFF before the pins become outputs
+  digitalWrite(RELAY_COOL_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
+  pinMode(RELAY_HEAT_PIN, OUTPUT);
+  pinMode(RELAY_COOL_PIN, OUTPUT);
+  settingsLoad();
+  lcd.begin(16, 2);
+  lcd.setCursor(0, 0);
+  lcd.print("IR hub + climate");
+  lcd.setCursor(0, 1);
+  lcd.print("version 3.0");
+  delay(1200);
+  uint32_t now = millis();
+  heatChangedAt = coolChangedAt = lastGoodAt = lastSampleAt = histHourStart = now;
+  for (uint8_t i = 0; i < HIST_BINS; i++) histClear(i);
+  shownLine[0][0] = shownLine[1][0] = 0;
+}
+
+#endif   // CLIMATE_ENABLED
+
+// True when no remote key is being handled and nothing is being received: then the sensor and the display may block for a few milliseconds.
+uint32_t lastRxAt = 0;
+bool irIdle() {
+  return activeRule < 0 && !fwdActive && !(dbHaveHeader && (uint32_t)(millis() - dbHeaderAt) < 100UL) &&
+         digitalRead(RX_PIN) == HIGH && (uint32_t)(millis() - lastRxAt) > 30UL;
 }
 
 void setup() {
@@ -725,12 +1198,20 @@ void setup() {
   pinMode(TX_PIN, OUTPUT);
   digitalWrite(TX_PIN, LOW);
   hardwareOn();
+#if CLIMATE_ENABLED
+  climateSetup();
+#endif
 }
 
 void loop() {
   if (digitalRead(RX_PIN) == LOW) {
+    lastRxAt = millis();
     if (captureFrame()) handleFrame();
   }
   serviceActive();
   serviceForward();
+#if CLIMATE_ENABLED
+  climateFast();
+  if (irIdle()) climateSlow();
+#endif
 }

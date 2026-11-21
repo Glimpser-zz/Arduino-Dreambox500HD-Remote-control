@@ -26,13 +26,15 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 * **B. Away from the devices**, in the direction where the Sony remote is used. The Yamaha and Dreambox remotes reach their devices directly, so set `FORWARD_YAMAHA_REMOTE` and `FORWARD_DREAMBOX_REMOTE` to `0`.
   Keys with a rule are still converted; the Sony remote's other keys are still passed on to the TV.
 
-* All IR output uses a **hardware carrier from Timer3** (pin 5, `OC3A`): 38 kHz for the Dreambox and the Yamaha amplifier, 40 kHz for re-sent Sony codes.
+* All IR output uses a **hardware carrier from Timer3** (pin 3, `OC3C`): 38 kHz for the Dreambox and the Yamaha amplifier, 40 kHz for re-sent Sony codes.
+* **Thermostat (version 3.0):** an AM2302 sensor, a 2-channel relay module and the LCD keypad shield turn the Arduino into a heating and cooling thermostat with a summer and a winter mode, a display of the temperature and humidity with their 24 hour minimum and maximum, and settings with the shield's buttons. See [docs/thermostat.md](docs/thermostat.md).
 
 ## Hardware
 
 * Arduino Mega 2560
 * KY-022 IR receiver module, signal on **pin 52**
-* IR LED on **pin 5**, switched by a transistor (details and resistor values in [`docs/hardware.md`](docs/hardware.md))
+* IR LED on **pin 3**, switched by a transistor (details and resistor values in [`docs/hardware.md`](docs/hardware.md))
+* LCD keypad shield (DFRobot type), AM2302 sensor on pin 22, 2-channel relay module on pins 23 and 24 (version 3.0, see [`docs/hardware.md`](docs/hardware.md))
 
 ## Quick start
 
@@ -46,7 +48,7 @@ The first line of the sketch contains its version and build date.
 ## Repository layout
 
 ```
-src/ir_converter_smooth_serial/   the converter and repeater sketch (three remotes, version 2.0)
+src/ir_converter_smooth_serial/   the converter, repeater and thermostat sketch (version 3.0)
 tools/dreambox_decode/            prints the frames of an IR remote as hexadecimal words (use it to capture the original Dreambox remote)
 tools/ir_rawdump/                 prints raw mark/space lengths of any IR remote
 data/                             extracted Dreambox codes: CSV and text tables
@@ -56,6 +58,7 @@ docs/                             hardware, protocol, key codes, mapping, extrac
 ## Documentation
 
 * [Hardware and wiring](docs/hardware.md)
+* [Thermostat: modes, display, settings](docs/thermostat.md)
 * [Dreambox IR protocol](docs/dreambox-ir-protocol.md)
 * [Dreambox key codes (extracted)](docs/dreambox-key-codes.md)
 * [Sony to Yamaha / Dreambox mapping](docs/sony-yamaha-mapping.md)
@@ -64,7 +67,9 @@ docs/                             hardware, protocol, key codes, mapping, extrac
 
 ## Status and honest limitations
 
-* **Version 2.0 (three remotes) has only been tested in a simulator**, not yet on the real devices. Versions up to 1.6 were tested on the TV, the Dreambox and the amplifier.
+* **Versions 2.0 and 3.0 have been tested in a simulator, and on the real devices only partly.** Versions up to 1.6 were tested on the TV, the Dreambox and the amplifier. With version 2.0 the Sony and Yamaha remotes worked on the author's setup, **the Dreambox remote did not**; the cause is not found yet (version 3.0 prints the raw durations of a Dreambox-like frame that it cannot decode, which will show why).
+* The thermostat of version 3.0 (sensor, display, buttons, relays) has not been tested on the real hardware yet.
+* In version 3.0 the IR LED is on **pin 3** (it was on pin 5 until 2.0), because the LCD shield uses pin 5.
 * Yamaha remote: how it behaves when a key is held (full frames or short repeat codes) has not been captured. The sketch accepts both; a held key is passed on only after the remote has shown that it is held, so a tap stays a single frame.
 * The Arduino does not receive while it transmits: a key pressed during a transmission (about 40 ms to 340 ms) is not seen.
 

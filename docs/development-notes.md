@@ -20,7 +20,7 @@ different carrier frequencies from 35 to 40 kHz, different mark lengths from 200
 A sketch written with this pattern **did** work and is what the converter uses:
 
 * configure Timer3 in fast PWM mode 14 (TOP = ICR3, no prescaler), duty about 1/3, with the output disconnected;
-* for every burst: reset `TCNT3` to 0, connect `OC3A` by setting `COM3A1`, wait with `delayMicroseconds()`, disconnect, and drive the pin LOW with `digitalWrite()`;
+* for every burst: reset `TCNT3` to 0, connect the output (`OC3A` up to version 2.0, `OC3C` on pin 3 since 3.0) by setting its `COM3x1` bit, wait with `delayMicroseconds()`, disconnect, and drive the pin LOW with `digitalWrite()`;
 * interrupts are blocked only while the timer registers are written.
 
 The reason why the other hardware variants failed was not found.
@@ -51,6 +51,9 @@ Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts,
 
 * **2.0** (simulator only, not tested on the devices yet): the sketch receives the Yamaha remote (NEC) and the Dreambox remote as well as the Sony remote, and rules can map any of them to any device (`IN_SONY`, `IN_NEC`, `IN_DREAMBOX` to `OUT_DREAMBOX`, `OUT_NEC`, `OUT_SONY`).
   Keys without a rule are passed on to their own device. Switches `FORWARD_SONY_REMOTE`, `FORWARD_YAMAHA_REMOTE`, `FORWARD_DREAMBOX_REMOTE` turn the passing on or off per remote (placement B in the README).
+
+* **3.0** (simulator only): thermostat added (AM2302 sensor, 2-channel relay module, LCD keypad shield, EEPROM settings, 24 hour history; see [thermostat.md](thermostat.md)).
+  The IR LED moved from pin 5 (`OC3A`) to pin 3 (`OC3C`) because the LCD shield uses pin 5. The sensor and the display are touched only while the IR part is idle. A Dreambox-like frame that cannot be decoded is printed (durations) with `USE_SERIAL 1`.
 
 ## Sony re-send: what the tests showed
 
