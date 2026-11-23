@@ -833,7 +833,8 @@ uint16_t legacySettingsChecksum(const uint8_t *p) {
   return sum;
 }
 
-bool legacySettingsValid(const LegacySettings &s) {
+bool legacySettingsValid(const uint8_t *data) {
+  const LegacySettings &s = *(const LegacySettings *)data;
   return s.magic == SETTINGS_MAGIC && s.version == 1 && s.mode <= MODE_SUMMER &&
          s.setpoint >= 50 && s.setpoint <= 350 && s.hysteresis >= 1 && s.hysteresis <= 100 &&
          s.offset >= -100 && s.offset <= 100 && s.minOnS <= 1800 && s.minOffS <= 3600 &&
@@ -856,7 +857,7 @@ void settingsLoad() {
 
   LegacySettings old;
   EEPROM.get(0, old);
-  if (legacySettingsValid(old)) {
+  if (legacySettingsValid((const uint8_t *)&old)) {
     settingsDefaults();
     cfg.mode = old.mode;
     cfg.setpoint = old.setpoint;
