@@ -6,7 +6,7 @@
 |---|---|
 | Arduino Mega 2560 | controller |
 | KY-022 IR receiver module | receives the three remotes (signal on pin 52) |
-| IR LED, 5 mm, 940 nm class | transmitter, on pin 3 |
+| IR LED, 5 mm, 940 nm class | transmitter, on pin 45 (`OC5B` / Timer5) |
 | NPN transistor (2N2222, BC337 ...) or logic-level MOSFET | switches the LED current |
 | resistors | see below |
 | LCD keypad shield (DFRobot type, 16 x 2 LCD and 5 buttons) | display and settings of the thermostat (version 3.0) |
@@ -18,7 +18,7 @@
 | Pin | Function |
 |---|---|
 | 52 | IR receiver signal (KY-022) |
-| 3 | IR LED driver, **Timer3 output OC3C**: the carrier comes from the hardware timer |
+| 45 | IR LED driver, **Timer5 output OC5B**: the carrier comes from the hardware timer |
 | 13 | built-in LED, on while a code is being sent |
 | 4, 5, 6, 7, 8, 9 | LCD keypad shield: D4, D5, D6, D7, RS (8) and EN (9); in the sketch `LiquidCrystal lcd(8, 9, 4, 5, 6, 7)` |
 | 10 | LCD backlight on the shield (the sketch leaves it alone) |
@@ -27,16 +27,16 @@
 | 23 | relay module IN1: heating |
 | 24 | relay module IN2: cooling |
 
-**The IR LED moved from pin 5 to pin 3 in version 3.0.** The LCD keypad shield uses pins 4 to 10, so pin 5 is the shield's D5 line.
-Timer3 has three outputs on the Mega: pin 5 (OC3A), pin 2 (OC3B) and pin 3 (OC3C); the sketch now uses pin 3. Timer3 is a free 16-bit timer, so `delay()`, `millis()` and `micros()` (Timer0) are not affected.
-Do not use pin 4 for the IR LED: it belongs to Timer0.
+**The IR LED output is currently on pin 45 (`OC5B` / Timer5).** The earlier version 3.0 wiring used pin 3 (`OC3C` / Timer3); pin 5 is reserved for the LCD keypad shield's D5 line.
+On the Mega 2560, Timer5 outputs are pin 46 (`OC5A`), pin 45 (`OC5B`) and pin 44 (`OC5C`). This sketch uses the hardware output on pin 45. Timer5 is a free 16-bit timer in this project; `delay()`, `millis()` and `micros()` (Timer0) are not affected.
+Do not use pins 44 or 46 for other functions while the Timer5 carrier output is configured; pin 45 is the IR LED driver output.
 
 ## LED driver
 
 The LED is switched on the low side. The Arduino pin only drives the base (or gate), the LED current flows from 5 V.
 
 ```
-pin 3 ---- base resistor ---- base of NPN
+pin 45 ---- base resistor ---- base of NPN
 5 V ---- LED series resistor ---- anode of the IR LED
 cathode of the IR LED ---- collector
 emitter ---- GND (common with the Arduino GND)
@@ -53,7 +53,7 @@ The IRFZ44N is **not** a logic-level MOSFET: its gate threshold is 2 to 4 V and 
 Pin order with the printed side facing you and the leads pointing down: gate, drain, source. The metal tab is the drain.
 
 ```
-pin 3 ---- 100..220 ohm ---- gate
+pin 45 ---- 100..220 ohm ---- gate
 gate ---- 10 kohm ---- GND
 5 V ---- LED resistor ---- LED anode
 LED cathode ---- drain
