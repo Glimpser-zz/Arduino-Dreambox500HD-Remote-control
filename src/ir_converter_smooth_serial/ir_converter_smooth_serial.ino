@@ -1,13 +1,13 @@
-// ir_converter_smooth_serial | version 3.0 | build date 2026-11-17 | IR converter (Sony, Yamaha, Dreambox) + climate control | IR carrier: hardware timer (Timer3, pin 3)
+// ir_converter_smooth_serial | version 3.0 | build date 2026-11-17 | IR converter (Sony, Yamaha, Dreambox) + climate control | IR carrier: hardware timer (Timer5, pin 45)
 #include <Arduino.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
 
-// IR converter and repeater - Arduino Mega 2560, hardware carrier from Timer3
+// IR converter and repeater - Arduino Mega 2560, hardware carrier from Timer5
 // Receives the Sony TV remote, the Yamaha amplifier remote and the Dreambox remote with one KY-022 receiver (pin 52).
-// Sends to the Sony TV, the Yamaha amplifier and the Dreambox with one IR LED + driver (pin 3, Timer3 output OC3C).
+// Sends to the Sony TV, the Yamaha amplifier and the Dreambox with one IR LED + driver (pin 45, Timer5 output OC5B).
 //
 // Version 3.0 adds a thermostat: AM2302 (DHT22) temperature and humidity sensor, a 2-channel relay module for heating and cooling,
 // and the DFRobot LCD keypad shield for the display and the settings (see the CLIMATE section further down).
@@ -42,7 +42,7 @@
 #endif
 
 const uint8_t RX_PIN = 52;
-const uint8_t TX_PIN = 3;              // OC3C / Timer3 (moved from pin 5: the LCD keypad shield uses pins 4 to 10)
+const uint8_t TX_PIN = 45;             // OC5B / Timer5
 const uint8_t STATUS_LED = 13;
 const uint16_t CARRIER_KHZ = 38;             // Dreambox and Yamaha
 const uint8_t  SONY_CARRIER_KHZ = 40;          // carrier for Sony codes: 40 kHz is the Sony standard (36 to 42 kHz all worked in the scan)
@@ -147,7 +147,7 @@ const Rule &ruleAt(int8_t i) { return (i == (int8_t)RULE_COUNT) ? dynRule : RULE
 bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY; }
 
 // --------------------------------------------------
-// Timer3 hardware PWM on pin 3 (OC3C)
+// Timer5 hardware PWM on pin 45 (OC5B)
 // --------------------------------------------------
 
 uint8_t currentCarrierKhz = 0;
@@ -159,18 +159,18 @@ void setCarrier(uint8_t khz) {
   uint8_t oldSREG = SREG;
   cli();
 
-  // Stop and disconnect Timer3.
-  TCCR3A = 0;
-  TCCR3B = 0;
+  // Stop and disconnect Timer5.
+  TCCR5A = 0;
+  TCCR5B = 0;
 
-  // Fast PWM mode 14, TOP = ICR3, prescaler = 1.
-  ICR3 = (uint16_t)(F_CPU / (khz * 1000UL)) - 1;
-  OCR3C = (ICR3 + 1) / 3;
-  TCNT3 = 0;
+  // Fast PWM mode 14, TOP = ICR5, prescaler = 1.
+  ICR5 = (uint16_t)(F_CPU / (khz * 1000UL)) - 1;
+  OCR5B = (ICR5 + 1) / 3;
+  TCNT5 = 0;
 
-  // Start Timer3 with output disconnected.
-  TCCR3A = _BV(WGM31);
-  TCCR3B = _BV(WGM33) | _BV(WGM32) | _BV(CS30);
+  // Start Timer5 with output disconnected.
+  TCCR5A = _BV(WGM31);
+  TCCR5B = _BV(WGM33) | _BV(WGM32) | _BV(CS30);
 
   SREG = oldSREG;
 
@@ -190,10 +190,10 @@ void burst(uint16_t us) {
   cli();
 
   // Begin each burst at a known timer phase.
-  TCNT3 = 0;
+  TCNT5 = 0;
 
-  // Connect OC3C in non-inverting PWM mode.
-  TCCR3A |= _BV(COM3C1);
+  // Connect OC5B in non-inverting PWM mode.
+  TCCR5A |= _BV(COM5B1);
 
   SREG = oldSREG;
 
@@ -202,12 +202,12 @@ void burst(uint16_t us) {
   oldSREG = SREG;
   cli();
 
-  // Disconnect OC3C at the end of the burst.
-  TCCR3A &= ~(_BV(COM3C1) | _BV(COM3C0));
+  // Disconnect OC5B at the end of the burst.
+  TCCR5A &= ~(_BV(COM5B1) | _BV(COM5B0));
 
   SREG = oldSREG;
 
-  // Hold pin 3 LOW between bursts.
+  // Hold pin 45 LOW between bursts.
   digitalWrite(TX_PIN, LOW);
 }
 
@@ -772,18 +772,20 @@ const uint16_t SETTINGS_MAGIC = 0xC1A7;
 const uint8_t SETTINGS_VERSION = 1;
 Settings cfg;
 
-uint16_t settingsChecksum(const Settings &s) {
-  const uint8_t *p = (const uint8_t *)&s;
+// Byte-pointer parameters avoid Arduino IDE auto-prototypes referring to Settings
+// before the structure definition is visible to the compiler.
+uint16_t settingsChecksum(const uint8_t *p) {
   uint16_t sum = 0x55AA;
   for (uint8_t i = 0; i < sizeof(Settings) - 2; i++) sum = (uint16_t)((sum << 1) | (sum >> 15)) ^ p[i];
   return sum;
 }
 
-bool settingsValid(const Settings &s) {
+bool settingsValid(const uint8_t *data) {
+  const Settings &s = *(const Settings *)data;
   return s.magic == SETTINGS_MAGIC && s.version == SETTINGS_VERSION && s.mode <= MODE_SUMMER &&
          s.setpoint >= 50 && s.setpoint <= 350 && s.hysteresis >= 1 && s.hysteresis <= 100 &&
          s.offset >= -100 && s.offset <= 100 && s.minOnS <= 1800 && s.minOffS <= 3600 &&
-         s.checksum == settingsChecksum(s);
+         s.checksum == settingsChecksum(data);
 }
 
 void settingsDefaults() {
@@ -800,11 +802,11 @@ void settingsDefaults() {
 
 void settingsLoad() {
   EEPROM.get(0, cfg);
-  if (!settingsValid(cfg)) settingsDefaults();
+  if (!settingsValid((const uint8_t *)&cfg)) settingsDefaults();
 }
 
 void settingsSave() {
-  cfg.checksum = settingsChecksum(cfg);
+  cfg.checksum = settingsChecksum((const uint8_t *)&cfg);
   EEPROM.put(0, cfg);           // writes only the bytes that changed
 }
 
