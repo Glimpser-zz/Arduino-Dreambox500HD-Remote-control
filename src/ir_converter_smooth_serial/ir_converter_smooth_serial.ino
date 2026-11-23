@@ -144,7 +144,10 @@ const uint8_t RULE_COUNT = sizeof(RULES) / sizeof(RULES[0]);
 // An unmapped key of the Yamaha or Dreambox remote becomes a temporary rule that sends the same code back out.
 Rule dynRule = { IN_NEC, 0, 0, OUT_NEC, 0, true, 0 };
 const Rule &ruleAt(int8_t i) { return (i == (int8_t)RULE_COUNT) ? dynRule : RULES[i]; }
-bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY; }
+
+// Per-remote repeat controls; loaded from EEPROM with the climate settings.
+bool remoteRepeatEnabled[3] = { true, true, true };  // Sony, Yamaha (NEC), Dreambox
+bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY && remoteRepeatEnabled[(uint8_t)r.in]; }
 
 // --------------------------------------------------
 // Timer5 hardware PWM on pin 45 (OC5B)
@@ -738,6 +741,7 @@ void handleFrame() {
 //   relay IN2         : pin 24   cooling
 // Buttons: LEFT / RIGHT change the page; on the main page UP / DOWN change the set temperature and SELECT changes
 // the mode (Off, Winter = heating, Summer = cooling); on the settings page SELECT chooses the field, UP / DOWN change it.
+// Settings also include independent repeat switches for Sony, Yamaha and Dreambox, plus a master climate-control switch.
 // The IR part always has priority: the sensor is read and the display is written only while no remote key is being handled.
 
 #define CLIMATE_ENABLED 1              // 0 = IR converter only
@@ -766,11 +770,29 @@ struct Settings {
   int16_t  offset;        // sensor offset, tenths of a degree
   uint16_t minOnS;        // minimum time a relay stays on, seconds
   uint16_t minOffS;       // minimum time a relay stays off, seconds
+  uint8_t  repeatSony;    // repeat mapped Sony remote commands while held
+  uint8_t  repeatYamaha;  // repeat mapped/forwarded Yamaha commands while held
+  uint8_t  repeatDreambox;// repeat mapped/forwarded Dreambox commands while held
+  uint8_t  climateEnabled;// master enable for summer/winter thermostat and both relays
+  uint16_t checksum;
+};
+
+// Previous EEPROM layout, retained for a one-time migration without losing thermostat settings.
+struct LegacySettings {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  mode;
+  int16_t  setpoint;
+  int16_t  hysteresis;
+  int16_t  offset;
+  uint16_t minOnS;
+  uint16_t minOffS;
   uint16_t checksum;
 };
 const uint16_t SETTINGS_MAGIC = 0xC1A7;
-const uint8_t SETTINGS_VERSION = 1;
+const uint8_t SETTINGS_VERSION = 2;
 Settings cfg;
+bool climateControlEnabled = true;
 
 // Byte-pointer parameters avoid Arduino IDE auto-prototypes referring to Settings
 // before the structure definition is visible to the compiler.
@@ -797,15 +819,62 @@ void settingsDefaults() {
   cfg.offset = 0;
   cfg.minOnS = 30;
   cfg.minOffS = 120;
+  cfg.repeatSony = 1;
+  cfg.repeatYamaha = 1;
+  cfg.repeatDreambox = 1;
+  cfg.climateEnabled = 1;
   cfg.checksum = 0;
+}
+
+uint16_t legacySettingsChecksum(const uint8_t *p) {
+  uint16_t sum = 0x55AA;
+  for (uint8_t i = 0; i < sizeof(LegacySettings) - 2; i++) sum = (uint16_t)((sum << 1) | (sum >> 15)) ^ p[i];
+  return sum;
+}
+
+bool legacySettingsValid(const LegacySettings &s) {
+  return s.magic == SETTINGS_MAGIC && s.version == 1 && s.mode <= MODE_SUMMER &&
+         s.setpoint >= 50 && s.setpoint <= 350 && s.hysteresis >= 1 && s.hysteresis <= 100 &&
+         s.offset >= -100 && s.offset <= 100 && s.minOnS <= 1800 && s.minOffS <= 3600 &&
+         s.checksum == legacySettingsChecksum((const uint8_t *)&s);
+}
+
+void applySettings() {
+  remoteRepeatEnabled[0] = cfg.repeatSony != 0;
+  remoteRepeatEnabled[1] = cfg.repeatYamaha != 0;
+  remoteRepeatEnabled[2] = cfg.repeatDreambox != 0;
+  climateControlEnabled = cfg.climateEnabled != 0;
 }
 
 void settingsLoad() {
   EEPROM.get(0, cfg);
-  if (!settingsValid((const uint8_t *)&cfg)) settingsDefaults();
+  if (settingsValid((const uint8_t *)&cfg)) {
+    applySettings();
+    return;
+  }
+
+  LegacySettings old;
+  EEPROM.get(0, old);
+  if (legacySettingsValid(old)) {
+    settingsDefaults();
+    cfg.mode = old.mode;
+    cfg.setpoint = old.setpoint;
+    cfg.hysteresis = old.hysteresis;
+    cfg.offset = old.offset;
+    cfg.minOnS = old.minOnS;
+    cfg.minOffS = old.minOffS;
+    settingsSave();
+  } else {
+    settingsDefaults();
+  }
+  applySettings();
 }
 
 void settingsSave() {
+  cfg.repeatSony = remoteRepeatEnabled[0] ? 1 : 0;
+  cfg.repeatYamaha = remoteRepeatEnabled[1] ? 1 : 0;
+  cfg.repeatDreambox = remoteRepeatEnabled[2] ? 1 : 0;
+  cfg.climateEnabled = climateControlEnabled ? 1 : 0;
   cfg.checksum = settingsChecksum((const uint8_t *)&cfg);
   EEPROM.put(0, cfg);           // writes only the bytes that changed
 }
@@ -944,7 +1013,7 @@ void thermostatService() {
   if ((uint32_t)(now - lastRun) < 1000UL) return;
   lastRun = now;
 
-  if (!sensorFresh() || cfg.mode == MODE_OFF) { forceOff(); return; }
+  if (!climateControlEnabled || !sensorFresh() || cfg.mode == MODE_OFF) { forceOff(); return; }
   int16_t t = curTemp();
   if (cfg.mode == MODE_WINTER) {
     setCool(false);
@@ -1013,7 +1082,7 @@ uint8_t buttonEvent() {
 uint8_t page = 0;                     // 0 main, 1 temperature 24 h, 2 humidity 24 h, 3 settings
 uint8_t field = 0;                    // settings field
 uint32_t lastButtonAt = 0;
-const uint8_t FIELD_COUNT = 6;
+const uint8_t FIELD_COUNT = 10;
 
 void changeSetpoint(int16_t d) {
   long v = (long)cfg.setpoint + d;
@@ -1035,7 +1104,14 @@ void changeField(int8_t dir) {
     case 2: v = (long)cfg.hysteresis + dir;      cfg.hysteresis = (int16_t)(v < 1 ? 1 : (v > 100 ? 100 : v)); break;
     case 3: v = (long)cfg.offset + dir;          cfg.offset = (int16_t)(v < -100 ? -100 : (v > 100 ? 100 : v)); break;
     case 4: v = (long)cfg.minOnS + dir * 10L;    cfg.minOnS = (uint16_t)(v < 0 ? 0 : (v > 1800 ? 1800 : v)); break;
-    default: v = (long)cfg.minOffS + dir * 30L;  cfg.minOffS = (uint16_t)(v < 0 ? 0 : (v > 3600 ? 3600 : v)); break;
+    case 5: v = (long)cfg.minOffS + dir * 30L;  cfg.minOffS = (uint16_t)(v < 0 ? 0 : (v > 3600 ? 3600 : v)); break;
+    case 6: remoteRepeatEnabled[0] = !remoteRepeatEnabled[0]; break;
+    case 7: remoteRepeatEnabled[1] = !remoteRepeatEnabled[1]; break;
+    case 8: remoteRepeatEnabled[2] = !remoteRepeatEnabled[2]; break;
+    default:
+      climateControlEnabled = !climateControlEnabled;
+      if (!climateControlEnabled) forceOff();
+      break;
   }
   markDirty();
 }
@@ -1115,7 +1191,7 @@ void uiDraw() {
       snprintf(l1, sizeof(l1), "%d / %d %%", (hMin + 5) / 10, (hMax + 5) / 10);
     }
   } else {
-    static const char *const names[FIELD_COUNT] = { "Mode", "Setpoint", "Hysteresis", "Offset", "Min ON", "Min OFF" };
+    static const char *const names[FIELD_COUNT] = { "Mode", "Setpoint", "Hysteresis", "Offset", "Min ON", "Min OFF", "Sony repeat", "Yamaha repeat", "Dreambox repeat", "Climate control" };
     snprintf(l0, sizeof(l0), "%d/%d %s", field + 1, FIELD_COUNT, names[field]);
     switch (field) {
       case 0: snprintf(l1, sizeof(l1), "%s", cfg.mode == MODE_OFF ? "OFF" : (cfg.mode == MODE_WINTER ? "WINTER heating" : "SUMMER cooling")); break;
@@ -1123,7 +1199,11 @@ void uiDraw() {
       case 2: fmtTenths(a, sizeof(a), cfg.hysteresis); snprintf(l1, sizeof(l1), "+/- %s C", a); break;
       case 3: fmtTenths(a, sizeof(a), cfg.offset);     snprintf(l1, sizeof(l1), "%s C", a); break;
       case 4: snprintf(l1, sizeof(l1), "%u s", cfg.minOnS); break;
-      default: snprintf(l1, sizeof(l1), "%u s", cfg.minOffS); break;
+      case 5: snprintf(l1, sizeof(l1), "%u s", cfg.minOffS); break;
+      case 6: snprintf(l1, sizeof(l1), "%s", remoteRepeatEnabled[0] ? "ON" : "OFF"); break;
+      case 7: snprintf(l1, sizeof(l1), "%s", remoteRepeatEnabled[1] ? "ON" : "OFF"); break;
+      case 8: snprintf(l1, sizeof(l1), "%s", remoteRepeatEnabled[2] ? "ON" : "OFF"); break;
+      default: snprintf(l1, sizeof(l1), "%s", climateControlEnabled ? "ON" : "OFF"); break;
     }
   }
   showLine(0, l0);
