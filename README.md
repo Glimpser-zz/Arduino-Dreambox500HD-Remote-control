@@ -18,6 +18,7 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the key is held. All other converted keys send one action.
 * The rules are a table in the sketch (`RULES`). Each rule has the remote, the code, the target and whether the key is continuous. See [mapping](docs/sony-yamaha-mapping.md).
+* **Version 3.1 menu:** repeat-while-held can be enabled or disabled independently for Sony, Yamaha and Dreambox. A separate **Climate control** switch disables/enables the complete summer/winter thermostat; OFF immediately de-energises both relays. These settings are stored in EEPROM.
 
 ### Two ways to place the Arduino
 
@@ -27,7 +28,7 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
   Keys with a rule are still converted; the Sony remote's other keys are still passed on to the TV.
 
 * All IR output uses a **hardware carrier from Timer5** (pin 45, `OC5B`): 38 kHz for the Dreambox and the Yamaha amplifier, 40 kHz for re-sent Sony codes.
-* **Thermostat (version 3.0):** an AM2302 sensor, a 2-channel relay module and the LCD keypad shield turn the Arduino into a heating and cooling thermostat with a summer and a winter mode, a display of the temperature and humidity with their 24 hour minimum and maximum, and settings with the shield's buttons. See [docs/thermostat.md](docs/thermostat.md).
+* **Thermostat (version 3.1):** an AM2302 sensor, a 2-channel relay module and the LCD keypad shield turn the Arduino into a heating and cooling thermostat with a summer and a winter mode, a display of the temperature and humidity with their 24 hour minimum and maximum, and settings with the shield's buttons. See [docs/thermostat.md](docs/thermostat.md).
 
 ## Hardware
 
