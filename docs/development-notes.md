@@ -53,6 +53,7 @@ Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts,
   Keys without a rule are passed on to their own device. Switches `FORWARD_SONY_REMOTE`, `FORWARD_YAMAHA_REMOTE`, `FORWARD_DREAMBOX_REMOTE` turn the passing on or off per remote (placement B in the README).
 
 * **3.0** (simulator only): thermostat added (AM2302 sensor, 2-channel relay module, LCD keypad shield, EEPROM settings, 24 hour history; see [thermostat.md](thermostat.md)).
+* **3.1:** the LCD settings page adds independent repeat-while-held controls for Sony, Yamaha and Dreambox input remotes, plus a master Climate control switch. Turning the climate master OFF immediately switches both relays off while temperature/humidity measurement and display remain active. EEPROM version 1 settings are migrated to version 2, preserving the existing thermostat mode, setpoint, hysteresis, offset and relay timing values.
   The IR LED moved from pin 5 (`OC3A`) to pin 3 (`OC3C`) because the LCD shield uses pin 5. The sensor and the display are touched only while the IR part is idle. A Dreambox-like frame that cannot be decoded is printed (durations) with `USE_SERIAL 1`.
 * **Current hardware update (post-3.0):** the IR LED output was moved from pin 3 (`OC3C` / Timer3) to pin 45 (`OC5B` / Timer5). The carrier generation remains hardware PWM; the LCD shield wiring and other functions are unchanged.
 
