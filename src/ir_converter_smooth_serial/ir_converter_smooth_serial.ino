@@ -807,6 +807,7 @@ bool settingsValid(const uint8_t *data) {
   return s.magic == SETTINGS_MAGIC && s.version == SETTINGS_VERSION && s.mode <= MODE_SUMMER &&
          s.setpoint >= 50 && s.setpoint <= 350 && s.hysteresis >= 1 && s.hysteresis <= 100 &&
          s.offset >= -100 && s.offset <= 100 && s.minOnS <= 1800 && s.minOffS <= 3600 &&
+         s.repeatSony <= 1 && s.repeatYamaha <= 1 && s.repeatDreambox <= 1 && s.climateEnabled <= 1 &&
          s.checksum == settingsChecksum(data);
 }
 
@@ -1105,11 +1106,11 @@ void changeField(int8_t dir) {
     case 3: v = (long)cfg.offset + dir;          cfg.offset = (int16_t)(v < -100 ? -100 : (v > 100 ? 100 : v)); break;
     case 4: v = (long)cfg.minOnS + dir * 10L;    cfg.minOnS = (uint16_t)(v < 0 ? 0 : (v > 1800 ? 1800 : v)); break;
     case 5: v = (long)cfg.minOffS + dir * 30L;  cfg.minOffS = (uint16_t)(v < 0 ? 0 : (v > 3600 ? 3600 : v)); break;
-    case 6: remoteRepeatEnabled[0] = !remoteRepeatEnabled[0]; break;
-    case 7: remoteRepeatEnabled[1] = !remoteRepeatEnabled[1]; break;
-    case 8: remoteRepeatEnabled[2] = !remoteRepeatEnabled[2]; break;
+    case 6: remoteRepeatEnabled[0] = (dir > 0); break;
+    case 7: remoteRepeatEnabled[1] = (dir > 0); break;
+    case 8: remoteRepeatEnabled[2] = (dir > 0); break;
     default:
-      climateControlEnabled = !climateControlEnabled;
+      climateControlEnabled = (dir > 0);
       if (!climateControlEnabled) forceOff();
       break;
   }
@@ -1191,7 +1192,7 @@ void uiDraw() {
       snprintf(l1, sizeof(l1), "%d / %d %%", (hMin + 5) / 10, (hMax + 5) / 10);
     }
   } else {
-    static const char *const names[FIELD_COUNT] = { "Mode", "Setpoint", "Hysteresis", "Offset", "Min ON", "Min OFF", "Sony repeat", "Yamaha repeat", "Dreambox repeat", "Climate control" };
+    static const char *const names[FIELD_COUNT] = { "Mode", "Setpoint", "Hysteresis", "Offset", "Min ON", "Min OFF", "Sony repeat", "Yam repeat", "DB repeat", "Climate ctrl" };
     snprintf(l0, sizeof(l0), "%d/%d %s", field + 1, FIELD_COUNT, names[field]);
     switch (field) {
       case 0: snprintf(l1, sizeof(l1), "%s", cfg.mode == MODE_OFF ? "OFF" : (cfg.mode == MODE_WINTER ? "WINTER heating" : "SUMMER cooling")); break;
