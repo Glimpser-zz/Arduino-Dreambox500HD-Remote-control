@@ -1,4 +1,4 @@
-// ir_converter_smooth_serial | version 3.0 | build date 2026-11-17 | IR converter (Sony, Yamaha, Dreambox) + climate control | IR carrier: hardware timer (Timer5, pin 45)
+// ir_converter_smooth_serial | version 3.1 | build date 2026-11-23 | IR converter (Sony, Yamaha, Dreambox) + climate control | IR carrier: hardware timer (Timer5, pin 45)
 #include <Arduino.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
@@ -1253,7 +1253,7 @@ void climateSetup() {
   lcd.setCursor(0, 0);
   lcd.print("IR hub + climate");
   lcd.setCursor(0, 1);
-  lcd.print("version 3.0");
+  lcd.print("version 3.1");
   delay(1200);
   uint32_t now = millis();
   heatChangedAt = coolChangedAt = lastGoodAt = lastSampleAt = histHourStart = now;
