@@ -19,8 +19,8 @@ A software-toggled carrier worked on the Dreambox. Several hardware-timer attemp
 different carrier frequencies from 35 to 40 kHz, different mark lengths from 200 to 600 us, and a variant that preset the timer counter to its TOP value before each burst.
 A sketch written with this pattern **did** work and is what the converter uses:
 
-* configure Timer3 in fast PWM mode 14 (TOP = ICR3, no prescaler), duty about 1/3, with the output disconnected;
-* for every burst: reset `TCNT3` to 0, connect the output (`OC3A` up to version 2.0, `OC3C` on pin 3 since 3.0) by setting its `COM3x1` bit, wait with `delayMicroseconds()`, disconnect, and drive the pin LOW with `digitalWrite()`;
+* configure Timer5 in fast PWM mode 14 (TOP = `ICR5`, no prescaler), duty about 1/3, with the output disconnected;
+* for every burst: reset `TCNT5` to 0, connect the output on pin 45 (`OC5B`) by setting `COM5B1`, wait with `delayMicroseconds()`, disconnect, and drive pin 45 LOW with `digitalWrite()`;
 * interrupts are blocked only while the timer registers are written.
 
 The reason why the other hardware variants failed was not found.
@@ -54,6 +54,7 @@ Sony SIRC uses a 40 kHz carrier, 2400 us start burst and 600/1200 us bit bursts,
 
 * **3.0** (simulator only): thermostat added (AM2302 sensor, 2-channel relay module, LCD keypad shield, EEPROM settings, 24 hour history; see [thermostat.md](thermostat.md)).
   The IR LED moved from pin 5 (`OC3A`) to pin 3 (`OC3C`) because the LCD shield uses pin 5. The sensor and the display are touched only while the IR part is idle. A Dreambox-like frame that cannot be decoded is printed (durations) with `USE_SERIAL 1`.
+* **Current hardware update (post-3.0):** the IR LED output was moved from pin 3 (`OC3C` / Timer3) to pin 45 (`OC5B` / Timer5). The carrier generation remains hardware PWM; the LCD shield wiring and other functions are unchanged.
 
 ## Sony re-send: what the tests showed
 
