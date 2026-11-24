@@ -15,7 +15,7 @@
 // For every key that is received:
 //   - if it has a rule in the RULES table below, the rule is executed (conversion between remotes);
 //   - if it has no rule, it is passed on unchanged to the device it belongs to:
-//         Sony remote    -> Sony TV      (one press of 3 frames, 45 ms apart, after the key is released)
+//         Sony remote    -> Sony TV      (the received SIRC frames are replayed after release: first frame only if Repeat is OFF, all received frames if ON)
 //         Yamaha remote  -> Yamaha amp   (NEC frame, repeated while the key is held)
 //         Dreambox remote-> Dreambox     (down pair, repeat pairs every 118 ms, up pair)
 //
