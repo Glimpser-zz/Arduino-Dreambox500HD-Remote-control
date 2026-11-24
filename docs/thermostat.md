@@ -36,12 +36,12 @@ Settings fields (page 3):
 | Offset (sensor correction) | -10.0 to +10.0 C | 0.1 | 0.0 |
 | Min ON (shortest time a relay stays on) | 0 to 1800 s | 10 | 30 |
 | Min OFF (shortest time a relay stays off) | 0 to 3600 s | 30 | 120 |
-| Sony repeat | Off / On while holding a mapped Sony key | | On |
-| Yamaha repeat | Off / On while holding a mapped or forwarded Yamaha key | | On |
-| Dreambox repeat | Off / On while holding a mapped or forwarded Dreambox key | | On |
+| Sony repeat | Off / On for repeated frames of an unmapped Sony key passed through to the TV | | On |
+| Yamaha repeat | Off / On for repeats of an unmapped Yamaha key passed through to the amplifier | | On |
+| Dreambox repeat | Off / On for repeats of an unmapped Dreambox key passed through to the Dreambox | | On |
 | Climate control | Off / On for the complete summer/winter thermostat and both relays | | On |
 
-On page 3, SELECT moves to the next field. UP enables a selected repeat/climate option; DOWN disables it. Disabling Climate control immediately switches both relays off; the sensor and display continue to work. The three remote-repeat switches are independent. The settings are saved to the EEPROM 3 seconds after the last change and are loaded at every start. Version 3.1 migrates valid version 3.0 EEPROM settings without losing the thermostat values. A stored copy that fails its checksum is replaced by the defaults.
+On page 3, SELECT moves to the next field. UP enables a selected repeat/climate option; DOWN disables it. Each remote Repeat switch affects only unmapped commands passed through unchanged: OFF still forwards the initial command once and suppresses the repeats received from that remote; ON forwards the initial command and its repeats. Commands matched by the conversion table are not affected. The three switches are independent. Disabling Climate control immediately switches both relays off; the sensor and display continue to work. The settings are saved to the EEPROM 3 seconds after the last change and are loaded at every start. Version 3.1 migrates valid version 3.0 EEPROM settings without losing the thermostat values. A stored copy that fails its checksum is replaced by the defaults.
 
 ## Protections
 
