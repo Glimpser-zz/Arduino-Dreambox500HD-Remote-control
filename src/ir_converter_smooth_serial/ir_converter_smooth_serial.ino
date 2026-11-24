@@ -15,9 +15,9 @@
 // For every key that is received:
 //   - if it has a rule in the RULES table below, the rule is executed (conversion between remotes);
 //   - if it has no rule, it is passed on unchanged to the device it belongs to:
-//         Sony remote    -> Sony TV      (the received SIRC frames are replayed after release: first frame only if Repeat is OFF, all received frames if ON)
-//         Yamaha remote  -> Yamaha amp   (NEC frame, repeated while the key is held)
-//         Dreambox remote-> Dreambox     (down pair, repeat pairs every 118 ms, up pair)
+//         Sony remote    -> Sony TV      (unmapped codes are forwarded only when the Sony Repeat switch is ON)
+//         Yamaha remote  -> Yamaha amp   (unmapped codes are forwarded only when the Yamaha Repeat switch is ON)
+//         Dreambox remote-> Dreambox     (unmapped codes are forwarded only when the Dreambox Repeat switch is ON)
 //
 // Two ways to place the Arduino:
 //   A) next to the Yamaha amplifier and the Dreambox, their own IR windows covered: keep all three FORWARD_ options at 1.
@@ -315,8 +315,9 @@ void finishForward() {
   setCarrier(CARRIER_KHZ);                          // back to the carrier of the other devices
 }
 
-// First frame of an unmapped Sony key.
+// First frame of an unmapped Sony key. Repeat OFF suppresses the entire unmapped command.
 void startForward(uint8_t bits, uint32_t value) {
+  if (!remoteRepeatEnabled[0]) return;
   fwdActive = true;
   fwdBits = bits;
   fwdValue = value;
@@ -615,7 +616,7 @@ void onKey(In in, uint8_t bits, uint32_t value) {
       Serial.print(F("DREAMBOX remote  key=")); Serial.print(value);
       Serial.print(F(" header=0x")); Serial.print(lastDbHeader, HEX);
     }
-    Serial.println(found >= 0 ? F("  -> rule found") : F("  -> no rule (passed on)"));
+    Serial.println(found >= 0 ? F("  -> rule found") : F("  -> no rule (pass-through depends on Repeat setting)"));
     Serial.flush();
   }
 #endif
@@ -640,6 +641,8 @@ void onKey(In in, uint8_t bits, uint32_t value) {
     if (!pass) return;
     finishForward();
     finishActive();
+    uint8_t repeatIndex = (in == IN_NEC) ? 1 : 2;
+    if (!remoteRepeatEnabled[repeatIndex]) return;  // Repeat OFF: suppress the entire unmapped command
     dynRule.in = in;                                // identity rule: the same code goes back out
     dynRule.inBits = bits;
     dynRule.inValue = value;
