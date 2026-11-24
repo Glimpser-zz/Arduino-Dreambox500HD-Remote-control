@@ -12,13 +12,13 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 
 | Key received from | Has a rule in the table | No rule |
 |---|---|---|
-| Sony TV remote | converted: Yamaha (NEC) or Dreambox code | sent on to the **Sony TV** unchanged (one press of 3 frames, 45 ms apart, 40 kHz, after the key is released) |
-| Yamaha remote | converted: Dreambox, Sony TV or another Yamaha code | sent on to the **Yamaha amplifier** unchanged (NEC frame, repeated while the key is held) |
-| Dreambox remote | converted: Yamaha, Sony TV or another Dreambox key | sent on to the **Dreambox** unchanged (down pair, repeat pairs every 118 ms, up pair) |
+| Sony TV remote | converted: Yamaha (NEC) or Dreambox code | sent on to the **Sony TV** unchanged after release: one received SIRC frame when Repeat is OFF, all received frames when ON (40 kHz) |
+| Yamaha remote | converted: Dreambox, Sony TV or another Yamaha code | sent on to the **Yamaha amplifier** unchanged: one NEC frame when Repeat is OFF; held-key repeats when ON |
+| Dreambox remote | converted: Yamaha, Sony TV or another Dreambox key | sent on to the **Dreambox** unchanged: down/up only when Repeat is OFF; repeat pairs while held when ON |
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the key is held. All other converted keys send one action.
 * The rules are a table in the sketch (`RULES`). Each rule has the remote, the code, the target and whether the key is continuous. See [mapping](docs/sony-yamaha-mapping.md).
-* **Version 3.1 menu:** repeat-while-held can be enabled or disabled independently for Sony, Yamaha and Dreambox. A separate **Climate control** switch disables/enables the complete summer/winter thermostat; OFF immediately de-energises both relays. These settings are stored in EEPROM.
+* **Version 3.1 menu:** the three independent Repeat switches control only repeats of **unmapped keys passed through unchanged** from the Sony, Yamaha and Dreambox remotes. OFF still forwards the initial command once; ON also forwards the received repeats. Rules in the conversion table are not affected. A separate **Climate control** switch disables/enables the complete summer/winter thermostat; OFF immediately de-energises both relays. These settings are stored in EEPROM.
 
 ### Two ways to place the Arduino
 
