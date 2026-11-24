@@ -147,7 +147,8 @@ const Rule &ruleAt(int8_t i) { return (i == (int8_t)RULE_COUNT) ? dynRule : RULE
 
 // Per-remote repeat controls; loaded from EEPROM with the climate settings.
 bool remoteRepeatEnabled[3] = { true, true, true };  // Sony, Yamaha (NEC), Dreambox
-bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY && remoteRepeatEnabled[(uint8_t)r.in]; }
+// The three Repeat switches apply only to unmapped pass-through keys (dynRule), not conversion-table rules.
+bool isHeld(const Rule &r) { return r.repeat && r.out != OUT_SONY && ((&r != &dynRule) || remoteRepeatEnabled[(uint8_t)r.in]); }
 
 // --------------------------------------------------
 // Timer5 hardware PWM on pin 45 (OC5B)
@@ -290,6 +291,7 @@ void sendSonyPress(uint8_t bits, uint32_t value) {
 // Forwarding state: one unmapped Sony key at a time.
 bool fwdActive = false;
 bool fwdPending = false;       // the press has not been sent yet (waiting for the key release)
+uint8_t fwdFrameCount = 0;     // number of received frames for this unknown Sony key
 uint8_t fwdBits = 0;
 uint32_t fwdValue = 0;
 uint32_t fwdLastFrameAt = 0;   // time of the last received frame of that key
@@ -300,7 +302,13 @@ void finishForward() {
   if (!fwdActive) return;
   if (fwdPending) {
     LOG("  forward: unmapped Sony code re-sent unchanged");
-    sendSonyPress(fwdBits, fwdValue);
+    setCarrier(SONY_CARRIER_KHZ);
+    uint8_t framesToSend = remoteRepeatEnabled[0] ? fwdFrameCount : 1;
+    for (uint8_t i = 0; i < framesToSend; i++) {
+      uint32_t t0 = millis();
+      sendSonyFrame(fwdBits, fwdValue);
+      while ((uint32_t)(millis() - t0) < SONY_FRAME_MS) { }
+    }
     fwdPending = false;
   }
   fwdActive = false;
@@ -312,6 +320,7 @@ void startForward(uint8_t bits, uint32_t value) {
   fwdActive = true;
   fwdBits = bits;
   fwdValue = value;
+  fwdFrameCount = 1;
   fwdLastFrameAt = millis();
 #if SONY_FORWARD_AFTER_RELEASE
   fwdPending = true;                                // sent when the key is released
@@ -460,7 +469,15 @@ uint16_t releaseMs(const Rule &r) {
 
 void runSingle(const Rule &r) {
   LOG("  send: single action");
-  if (r.out == OUT_DREAMBOX) dreamboxSequence((uint8_t)r.outValue);
+  if (r.out == OUT_DREAMBOX) {
+    if (&r == &dynRule) {                         // unknown Dreambox key, Repeat OFF: down + up only
+      dreamboxPair((uint8_t)r.outValue, FLAG_DOWN);
+      idle(RELEASE_GAP_US - MARK_US);
+      dreamboxPair((uint8_t)r.outValue, FLAG_UP);
+    } else {
+      dreamboxSequence((uint8_t)r.outValue);
+    }
+  }
   else if (r.out == OUT_NEC) sendNecTap(r.outValue);
   else {
     sendSonyPress(r.outBits, r.outValue);
@@ -582,6 +599,7 @@ void onKey(In in, uint8_t bits, uint32_t value) {
   }
   if (in == IN_SONY && found < 0 && fwdActive && bits == fwdBits && value == fwdValue) {
     fwdLastFrameAt = now;                           // the same unmapped Sony key is still down
+    if (remoteRepeatEnabled[0] && fwdFrameCount < 255) fwdFrameCount++;
     return;
   }
 
@@ -770,9 +788,9 @@ struct Settings {
   int16_t  offset;        // sensor offset, tenths of a degree
   uint16_t minOnS;        // minimum time a relay stays on, seconds
   uint16_t minOffS;       // minimum time a relay stays off, seconds
-  uint8_t  repeatSony;    // repeat mapped Sony remote commands while held
-  uint8_t  repeatYamaha;  // repeat mapped/forwarded Yamaha commands while held
-  uint8_t  repeatDreambox;// repeat mapped/forwarded Dreambox commands while held
+  uint8_t  repeatSony;    // forward repeated frames of unmapped Sony keys
+  uint8_t  repeatYamaha;  // forward repeats of unmapped Yamaha keys
+  uint8_t  repeatDreambox;// forward repeats of unmapped Dreambox keys
   uint8_t  climateEnabled;// master enable for summer/winter thermostat and both relays
   uint16_t checksum;
 };
