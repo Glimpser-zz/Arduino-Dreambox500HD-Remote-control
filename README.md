@@ -12,9 +12,9 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 
 | Key received from | Has a rule in the table | No rule |
 |---|---|---|
-| Sony TV remote | converted: Yamaha (NEC) or Dreambox code | sent on to the **Sony TV** unchanged after release: one received SIRC frame when Repeat is OFF, all received frames when ON (40 kHz) |
-| Yamaha remote | converted: Dreambox, Sony TV or another Yamaha code | sent on to the **Yamaha amplifier** unchanged: one NEC frame when Repeat is OFF; held-key repeats when ON |
-| Dreambox remote | converted: Yamaha, Sony TV or another Dreambox key | sent on to the **Dreambox** unchanged: down/up only when Repeat is OFF; repeat pairs while held when ON |
+| Sony TV remote | converted: Yamaha (NEC) or Dreambox code | sent on to the **Sony TV** unchanged only when Repeat is ON: all received SIRC frames after release (40 kHz) |
+| Yamaha remote | converted: Dreambox, Sony TV or another Yamaha code | sent on to the **Yamaha amplifier** unchanged only when Repeat is ON: the NEC frame and held-key repeats |
+| Dreambox remote | converted: Yamaha, Sony TV or another Dreambox key | sent on to the **Dreambox** unchanged only when Repeat is ON: down, repeat and up pairs |
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the key is held. All other converted keys send one action.
 * The rules are a table in the sketch (`RULES`). Each rule has the remote, the code, the target and whether the key is continuous. See [mapping](docs/sony-yamaha-mapping.md).
