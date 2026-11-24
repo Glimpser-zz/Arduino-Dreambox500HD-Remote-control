@@ -18,7 +18,7 @@ The Dreambox IR protocol used here is **not documented anywhere**. It was revers
 
 * Volume up / volume down are **continuous** on both devices: they repeat while the key is held. All other converted keys send one action.
 * The rules are a table in the sketch (`RULES`). Each rule has the remote, the code, the target and whether the key is continuous. See [mapping](docs/sony-yamaha-mapping.md).
-* **Version 3.1 menu:** the three independent Repeat switches control only repeats of **unmapped keys passed through unchanged** from the Sony, Yamaha and Dreambox remotes. OFF still forwards the initial command once; ON also forwards the received repeats. Rules in the conversion table are not affected. A separate **Climate control** switch disables/enables the complete summer/winter thermostat; OFF immediately de-energises both relays. These settings are stored in EEPROM.
+* **Version 3.1 menu:** the three independent Repeat switches control pass-through of **unmapped keys** from the Sony, Yamaha and Dreambox remotes. OFF suppresses the entire unmapped command: no initial frame and no repeat frames are sent. ON forwards the initial command and any repeats received. Rules in the conversion table are not affected. A separate **Climate control** switch disables/enables the complete summer/winter thermostat; OFF immediately de-energises both relays. These settings are stored in EEPROM.
 
 ### Two ways to place the Arduino
 
